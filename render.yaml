@@ -1,0 +1,38 @@
+services:
+  # Backend API
+  - type: web
+    name: athos-api
+    env: python
+    buildCommand: cd backend && pip install -r requirements.txt
+    startCommand: cd backend && python app.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          name: athos-api
+          type: web
+          property: url
+
+  # Frontend SvelteKit app
+  - type: web
+    name: athos-frontend
+    env: node
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm run preview
+    envVars:
+      - key: PUBLIC_API_URL
+        fromService:
+          name: athos-api
+          type: web
+          property: url
+
+# Database addon
+databases:
+  - name: athos-db
+    databaseName: athos
+    plan: free 
