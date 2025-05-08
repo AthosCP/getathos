@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Athos Web Control</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="loginForm" style="display: none;">
+    <h2>Athos Web Control</h2>
+    <p>Inicia sesión para activar la protección</p>
+    <div id="errorMessage" style="display: none; color: red;"></div>
+    <form>
+      <input type="email" id="email" placeholder="Email" required>
+      <input type="password" id="password" placeholder="Contraseña" required>
+      <button type="submit">Iniciar Sesión</button>
+    </form>
+  </div>
+
+  <div id="welcomeMessage" style="display: none;">
+    <h2>Bienvenido a Athos</h2>
+    <p>Tu navegación está siendo protegida</p>
+    <div id="policiesList"></div>
+    <button id="logoutButton">Cerrar Sesión</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html> 
