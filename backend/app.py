@@ -33,15 +33,15 @@ def verify_token():
             if request.endpoint not in ['login', 'register']:
                 return jsonify({"success": False, "error": "Token inválido o expirado"}), 401
 
-# Configuración más permisiva de CORS para desarrollo
+# Configuración más permisiva de CORS para desarrollo y producción
 CORS(app, supports_credentials=True, resources={
     r"/*": {
         "origins": [
             "http://localhost:5173",
+            "http://localhost:4173",
             "https://athos-frontend.onrender.com",
             "https://getathos.com",
-            "chrome-extension://*",
-            "null"
+            "https://www.getathos.com"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
