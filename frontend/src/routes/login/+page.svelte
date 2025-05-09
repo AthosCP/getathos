@@ -65,6 +65,9 @@
       <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
         Iniciar Sesión
       </h2>
+      <div class="bg-red-500 text-white p-4 m-4 rounded-lg text-center font-bold">
+        PRUEBA TAILWIND - Si ves esto en rojo, Tailwind está funcionando
+      </div>
     </div>
     <form class="mt-8 space-y-6" on:submit|preventDefault={handleSubmit}>
       <div class="rounded-md shadow-sm -space-y-px">
