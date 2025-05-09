@@ -842,9 +842,21 @@ def admin_dashboard():
 @admin_required
 def admin_get_clients():
     try:
+        print("=== Iniciando admin_get_clients ===")
+        print("Obteniendo token y claims...")
+        claims = get_jwt()
+        print(f"Claims del token: {claims}")
+        
+        print("Intentando obtener clientes de Supabase...")
         tenants = supabase.table('tenants').select('*').execute().data
+        print(f"Clientes obtenidos exitosamente: {tenants}")
+        
         return jsonify({"success": True, "data": tenants})
     except Exception as e:
+        print(f"=== ERROR en admin_get_clients ===")
+        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Mensaje de error: {str(e)}")
+        print(f"Traceback completo:", exc_info=True)
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/admin/clients', methods=['POST'])
@@ -998,4 +1010,6 @@ def admin_delete_user(user_id):
         return jsonify({"success": False, "error": str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001) 
+    import os
+    port = int(os.environ.get("PORT", 5001))
+    app.run(debug=True, host='0.0.0.0', port=port) 
