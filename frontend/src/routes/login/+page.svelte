@@ -13,7 +13,7 @@
     loading = true;
     
     try {
-      const res = await fetch('http://localhost:5001/api/login', {
+      const res = await fetch('https://getathos.com/api/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -65,9 +65,6 @@
       <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
         Iniciar Sesión
       </h2>
-      <div class="bg-red-500 text-white p-4 m-4 rounded-lg text-center font-bold">
-        PRUEBA TAILWIND - Si ves esto en rojo, Tailwind está funcionando
-      </div>
     </div>
     <form class="mt-8 space-y-6" on:submit|preventDefault={handleSubmit}>
       <div class="rounded-md shadow-sm -space-y-px">
