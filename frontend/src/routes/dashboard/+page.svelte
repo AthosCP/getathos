@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import Navbar from '$lib/Navbar.svelte';
+  import { API_URL } from '$lib/config';
 
   interface UserConfig {
     extension_enabled: boolean;
@@ -25,7 +26,7 @@
         return;
       }
 
-      const response = await fetch('http://localhost:5001/api/config', {
+      const response = await fetch(`${API_URL}/api/config`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

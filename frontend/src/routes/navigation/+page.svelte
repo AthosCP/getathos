@@ -1,6 +1,7 @@
 <script lang="ts">
   import Navbar from '$lib/Navbar.svelte';
   import { onMount } from 'svelte';
+  import { API_URL } from '$lib/config';
   type User = { id: string; email: string };
   type Log = {
     id: string;
@@ -35,7 +36,7 @@
   async function loadUsers() {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:5001/api/users', {
+      const res = await fetch(`${API_URL}/api/users`, {
         headers: { 
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -62,7 +63,7 @@
       if (action && action !== 'all') params.append('action', action);
       params.append('page', String(page));
       params.append('page_size', String(pageSize));
-      const res = await fetch(`http://localhost:5001/api/navigation_logs?${params.toString()}`, {
+      const res = await fetch(`${API_URL}/api/navigation_logs?${params.toString()}`, {
         headers: { 
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -104,7 +105,7 @@
   async function fetchDomainSuggestions(q: string) {
     if (!q) { domainSuggestions = []; return; }
     const token = localStorage.getItem('token');
-    const res = await fetch(`http://localhost:5001/api/navigation_logs?autocomplete=domain&q=${encodeURIComponent(q)}`, {
+    const res = await fetch(`${API_URL}/api/navigation_logs?autocomplete=domain&q=${encodeURIComponent(q)}`, {
       headers: { 
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
@@ -119,7 +120,7 @@
   async function fetchUrlSuggestions(q: string) {
     if (!q) { urlSuggestions = []; return; }
     const token = localStorage.getItem('token');
-    const res = await fetch(`http://localhost:5001/api/navigation_logs?autocomplete=url&q=${encodeURIComponent(q)}`, {
+    const res = await fetch(`${API_URL}/api/navigation_logs?autocomplete=url&q=${encodeURIComponent(q)}`, {
       headers: { 
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
@@ -147,7 +148,7 @@
         return;
       }
 
-      const res = await fetch('http://localhost:5001/api/navigation_logs/block', {
+      const res = await fetch(`${API_URL}/api/navigation_logs/block`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

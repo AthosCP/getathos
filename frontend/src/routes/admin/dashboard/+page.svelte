@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import AdminNavbar from '$lib/AdminNavbar.svelte';
+  import { API_URL } from '$lib/config';
 
   type Tenant = { 
     id: string; 
@@ -38,7 +39,7 @@
         return;
       }
 
-      const response = await fetch('http://localhost:5001/api/admin/dashboard', {
+      const response = await fetch(`${API_URL}/api/admin/dashboard`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

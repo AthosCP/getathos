@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { auth } from '$lib/auth';
+  import { API_URL } from '$lib/config';
   type Policy = { id: string; domain: string; action: string };
   let activeTab = 'access';
   let filter = 'all';
@@ -33,7 +34,7 @@
         goto('/login');
         return;
       }
-      const res = await fetch('http://localhost:5001/api/policies', {
+      const res = await fetch(`${API_URL}/api/policies`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -86,7 +87,7 @@
     try {
       if (isEdit) {
         // Editar
-        const res = await fetch(`http://localhost:5001/api/policies/${modalPolicy.id}`, {
+        const res = await fetch(`${API_URL}/api/policies/${modalPolicy.id}`, {
           method: 'PUT',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -108,7 +109,7 @@
         }
       } else {
         // Crear
-        const res = await fetch('http://localhost:5001/api/policies', {
+        const res = await fetch(`${API_URL}/api/policies`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -144,7 +145,7 @@
 
     if (!confirm('¿Seguro que deseas eliminar esta política?')) return;
     try {
-      const res = await fetch(`http://localhost:5001/api/policies/${id}`, {
+      const res = await fetch(`${API_URL}/api/policies/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });

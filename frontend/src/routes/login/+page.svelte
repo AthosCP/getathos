@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { auth } from '$lib/auth';
+  import { API_URL } from '$lib/config';
 
   let email = '';
   let password = '';
@@ -13,7 +14,7 @@
     loading = true;
     
     try {
-      const res = await fetch('https://getathos.com/api/login', {
+      const res = await fetch(`${API_URL}/api/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

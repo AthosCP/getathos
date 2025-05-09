@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import AdminNavbar from '$lib/AdminNavbar.svelte';
+  import { API_URL } from '$lib/config';
 
   type User = {
     id: string;
@@ -41,7 +42,7 @@
         return;
       }
 
-      const response = await fetch('http://localhost:5001/api/admin/users', {
+      const response = await fetch(`${API_URL}/api/admin/users`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -63,7 +64,7 @@
   async function loadClients() {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5001/api/admin/clients', {
+      const response = await fetch(`${API_URL}/api/admin/clients`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -81,7 +82,7 @@
   async function createUser() {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5001/api/admin/users', {
+      const response = await fetch(`${API_URL}/api/admin/users`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -113,7 +114,7 @@
     
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:5001/api/admin/users/${selectedUser.id}`, {
+      const response = await fetch(`${API_URL}/api/admin/users/${selectedUser.id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -139,7 +140,7 @@
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:5001/api/admin/users/${id}`, {
+      const response = await fetch(`${API_URL}/api/admin/users/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

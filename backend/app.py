@@ -39,6 +39,7 @@ CORS(app, supports_credentials=True, resources={
         "origins": [
             "http://localhost:5173",
             "https://athos-frontend.onrender.com",
+            "https://getathos.com",
             "chrome-extension://*",
             "null"
         ],
