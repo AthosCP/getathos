@@ -11,7 +11,7 @@ const dev = {
 };
 
 const prod = {
-  API_URL: 'https://api.getathos.com'
+  API_URL: 'https://athos-backend.onrender.com'  // URL de Render para el backend
 };
 
 // Determine if we're in a production environment
