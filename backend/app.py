@@ -36,7 +36,12 @@ def verify_token():
 # Configuración más permisiva de CORS para desarrollo
 CORS(app, supports_credentials=True, resources={
     r"/*": {
-        "origins": ["http://localhost:5173", "chrome-extension://*", "null"],
+        "origins": [
+            "http://localhost:5173",
+            "https://athos-frontend.onrender.com",
+            "chrome-extension://*",
+            "null"
+        ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
         "expose_headers": ["Content-Type", "Authorization"],
