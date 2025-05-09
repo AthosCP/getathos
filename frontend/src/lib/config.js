@@ -7,17 +7,18 @@
  */
 
 const dev = {
-  apiUrl: 'http://localhost:5001',
-  siteUrl: 'http://localhost:5173'
+  API_URL: 'http://localhost:5001'
 };
 
 const prod = {
-  apiUrl: 'https://api.getathos.com', // URL de la API en producción
-  siteUrl: 'https://getathos.com'     // URL del sitio en producción
+  API_URL: 'https://api.getathos.com'
 };
 
 // Determine if we're in a production environment
 const isProd = import.meta.env.PROD || window.location.hostname === 'getathos.com';
 
-// Export the appropriate config based on environment
-export default isProd ? prod : dev; 
+// Export the configuration based on environment
+export const API_URL = isProd ? prod.API_URL : dev.API_URL;
+
+// Configuración de la API
+export const API_URL_OLD = 'https://api.getathos.com'; 
