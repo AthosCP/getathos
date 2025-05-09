@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import AdminNavbar from '$lib/AdminNavbar.svelte';
-  import { createClient as createSupabaseClient } from '@supabase/supabase-js';
   import { API_URL } from '$lib/config';
+  import { supabase } from '$lib/supabaseClient';
 
   type Client = {
     id: string;
@@ -39,10 +39,6 @@
   let logoFile: File | null = null;
   let logoUploading = false;
   let logoUploadError = '';
-
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const supabase = createSupabaseClient(supabaseUrl, supabaseAnonKey);
 
   async function loadClients() {
     try {
