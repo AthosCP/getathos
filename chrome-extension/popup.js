@@ -1,5 +1,9 @@
+var t = (chrome.runtime.getURL("").startsWith("chrome-extension://"))
+  ? "https://api.getathos.com"
+  : "http://localhost:5001";
+
 document.addEventListener('DOMContentLoaded', () => {
-  const API_URL = "http://localhost:5001"
+  const API_URL = t
 
   // Elementos del DOM
   const loginForm = document.getElementById('loginForm')

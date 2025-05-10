@@ -41,7 +41,8 @@ CORS(app, supports_credentials=True, resources={
             "http://localhost:4173",
             "https://athos-frontend.onrender.com",
             "https://getathos.com",
-            "https://www.getathos.com"
+            "https://www.getathos.com",
+            "chrome-extension://*"  # Permitir todas las extensiones de Chrome
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
@@ -516,8 +517,19 @@ def create_policy():
         if data.get('action') not in ['allow', 'block']:
             return jsonify({"error": "Acción inválida"}), 400
             
-        # Insertar política
-        new_policy = supabase.table('policies').insert({
+        # Obtener el token JWT para pasar a Supabase
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+            
+        print("Datos a insertar en policies:", {
+            'tenant_id': data['tenant_id'],
+            'domain': data['domain'],
+            'action': data['action']
+        })
+        print("Tipo de tenant_id:", type(data['tenant_id']))
+            
+        # Insertar política usando el cliente con JWT
+        new_policy = user_supabase.table('policies').insert({
             'tenant_id': data['tenant_id'],
             'domain': data['domain'],
             'action': data['action']

@@ -1,38 +1,93 @@
-# sv
+# Athos Cybersecurity Platform
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Plataforma integral de ciberseguridad para empresas, que incluye:
+- **Frontend**: Aplicación web en SvelteKit
+- **Backend**: API en Flask (Python)
+- **Extensión de Chrome**: Control y monitoreo de navegación
+- **Integración con Supabase**: Autenticación, base de datos y almacenamiento
 
-## Creating a project
+---
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Estructura del proyecto
 
-```bash
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
+```
+Athos/
+├── backend/                # API Flask
+├── frontend/               # App SvelteKit (este README)
+├── chrome-extension/       # Extensión de Chrome (código fuente)
+│   └── dist/               # Build final de la extensión
+├── admin-panel/            # (opcional, panel antiguo o experimental)
 ```
 
-## Developing
+---
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Instalación y desarrollo local
 
+### 1. Backend (Flask)
 ```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+- El backend corre en `http://localhost:5001`
+- Variables de entorno necesarias: `SUPABASE_URL`, `SUPABASE_KEY`, `JWT_SECRET_KEY`
+
+### 2. Frontend (SvelteKit)
+```bash
+cd frontend
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
+- El frontend corre en `http://localhost:5173` o `:4173`
+- Variables de entorno necesarias en `.env` (claves de Supabase):
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
 
-## Building
+---
 
-To create a production version of your app:
+## Build y Deploy
 
-```bash
-npm run build
-```
+### Frontend en Render
+- El root del servicio debe ser la carpeta `frontend/`
+- Comando de build: `npm install && npm run build`
+- Comando de start: `npm run preview`
+- El archivo `vite.config.js` NO debe excluir `@supabase/supabase-js` del bundle
 
-You can preview the production build with `npm run preview`.
+### Backend en Render
+- Comando de start: `python app.py` (el backend detecta el puerto de Render automáticamente)
+- CORS configurado para aceptar peticiones de local y producción
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+---
+
+## Extensión de Chrome
+
+- El código fuente está en `chrome-extension/`
+- El build final está en `chrome-extension/dist/`
+- Para publicar:
+  1. Entra a `chrome-extension/dist/`
+  2. Crea un ZIP con todo el contenido de esa carpeta
+  3. Sube el ZIP a la Chrome Web Store
+- El `manifest.json` debe tener:
+  - `"name": "Athos Cybersecurity Platform"`
+  - `host_permissions` con URLs de backend local y producción
+
+---
+
+## Integración con Supabase
+- Se usa para autenticación, base de datos y almacenamiento de archivos (logos, etc.)
+- La instancia de Supabase se centraliza en `frontend/src/lib/supabaseClient.js`
+- El backend usa la clave de servicio para operaciones administrativas
+
+---
+
+## Contacto y soporte
+- Para dudas, soporte o contribuciones, contacta a: [nicobrave@icloud.com](mailto:nicobrave@icloud.com)
+
+---
+
+## Notas adicionales
+- El proyecto está listo para desarrollo local y despliegue en producción sin fricción
+- El frontend y backend detectan el entorno automáticamente
+- La extensión puede comunicarse tanto con el backend local como con el de producción

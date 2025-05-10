@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Athos Web Control",
+  "name": "Athos Cybersecurity Platform",
   "version": "0.0.1",
   "description": "Control de navegación web para empresas",
   "permissions": [
@@ -13,6 +13,7 @@
   ],
   "host_permissions": [
     "http://localhost:5001/*",
+    "https://api.getathos.com/*",
     "<all_urls>"
   ],
   "action": {
