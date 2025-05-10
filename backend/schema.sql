@@ -166,4 +166,14 @@ ON policies
 FOR DELETE
 USING (
   (auth.jwt() ->> 'role')::text = 'admin'
+);
+
+-- Política para permitir a los clientes crear usuarios en su tenant
+DROP POLICY IF EXISTS "Clientes crean usuarios en su tenant" ON users;
+CREATE POLICY "Clientes crean usuarios en su tenant"
+ON users
+FOR INSERT
+WITH CHECK (
+  tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+  AND (auth.jwt() ->> 'role')::text = 'client'
 ); 

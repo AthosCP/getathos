@@ -77,6 +77,17 @@ def admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
+def athos_owner_required(fn):
+    from functools import wraps
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        verify_jwt_in_request()
+        claims = get_jwt()
+        if claims.get('role') != 'athos_owner':
+            return jsonify({"success": False, "error": "No autorizado"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
 @app.route('/')
 def index():
     return jsonify({
@@ -1017,6 +1028,186 @@ def admin_delete_user(user_id):
         supabase.table('tenants').update({
             'users_count': len(supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
         }).eq('id', tenant_id).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# --- ENDPOINTS ATHOS OWNER: ADMINS ---
+@app.route('/api/athos/admins', methods=['GET'])
+@jwt_required()
+@athos_owner_required
+def athos_get_admins():
+    try:
+        admins = supabase.table('users').select('*').eq('role', 'admin').execute().data
+        return jsonify({"success": True, "data": admins})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/admins', methods=['POST'])
+@jwt_required()
+@athos_owner_required
+def athos_create_admin():
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        auth_user = supabase.auth.admin.create_user({
+            'email': email,
+            'password': password,
+            'email_confirm': True,
+            'user_metadata': {'role': 'admin'}
+        })
+        user = supabase.table('users').insert({
+            'id': auth_user.user.id,
+            'email': email,
+            'role': 'admin',
+            'status': 'active',
+            'created_at': datetime.utcnow().isoformat()
+        }).execute().data[0]
+        return jsonify({"success": True, "data": user})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/admins/<admin_id>', methods=['PUT'])
+@jwt_required()
+@athos_owner_required
+def athos_update_admin(admin_id):
+    try:
+        data = request.get_json()
+        updated = supabase.table('users').update(data).eq('id', admin_id).execute().data[0]
+        return jsonify({"success": True, "data": updated})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/admins/<admin_id>', methods=['DELETE'])
+@jwt_required()
+@athos_owner_required
+def athos_delete_admin(admin_id):
+    try:
+        supabase.table('users').delete().eq('id', admin_id).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# --- ENDPOINTS ATHOS OWNER: CLIENTES ---
+@app.route('/api/athos/clientes', methods=['GET'])
+@jwt_required()
+@athos_owner_required
+def athos_get_clientes():
+    try:
+        query = supabase.table('tenants').select('*')
+        name = request.args.get('name')
+        admin_id = request.args.get('admin_id')
+        if name:
+            query = query.ilike('name', f'%{name}%')
+        if admin_id:
+            query = query.eq('admin_id', admin_id)
+        clientes = query.execute().data
+        return jsonify({"success": True, "data": clientes})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/clientes', methods=['POST'])
+@jwt_required()
+@athos_owner_required
+def athos_create_cliente():
+    try:
+        data = request.get_json()
+        cliente = supabase.table('tenants').insert({
+            'name': data.get('name'),
+            'description': data.get('description'),
+            'max_users': data.get('max_users', 10),
+            'status': 'active',
+            'created_at': datetime.utcnow().isoformat()
+        }).execute().data[0]
+        return jsonify({"success": True, "data": cliente})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/clientes/<cliente_id>', methods=['PUT'])
+@jwt_required()
+@athos_owner_required
+def athos_update_cliente(cliente_id):
+    try:
+        data = request.get_json()
+        updated = supabase.table('tenants').update(data).eq('id', cliente_id).execute().data[0]
+        return jsonify({"success": True, "data": updated})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/clientes/<cliente_id>', methods=['DELETE'])
+@jwt_required()
+@athos_owner_required
+def athos_delete_cliente(cliente_id):
+    try:
+        supabase.table('tenants').delete().eq('id', cliente_id).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# --- ENDPOINTS ATHOS OWNER: USUARIOS ---
+@app.route('/api/athos/usuarios', methods=['GET'])
+@jwt_required()
+@athos_owner_required
+def athos_get_usuarios():
+    try:
+        query = supabase.table('users').select('*').eq('role', 'user')
+        email = request.args.get('email')
+        role = request.args.get('role')
+        tenant_id = request.args.get('tenant_id')
+        if email:
+            query = query.ilike('email', f'%{email}%')
+        if role:
+            query = query.eq('role', role)
+        if tenant_id:
+            query = query.eq('tenant_id', tenant_id)
+        usuarios = query.execute().data
+        return jsonify({"success": True, "data": usuarios})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/usuarios', methods=['POST'])
+@jwt_required()
+@athos_owner_required
+def athos_create_usuario():
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        auth_user = supabase.auth.admin.create_user({
+            'email': email,
+            'password': password,
+            'email_confirm': True,
+            'user_metadata': {'role': 'user'}
+        })
+        user = supabase.table('users').insert({
+            'id': auth_user.user.id,
+            'email': email,
+            'role': 'user',
+            'status': 'active',
+            'created_at': datetime.utcnow().isoformat()
+        }).execute().data[0]
+        return jsonify({"success": True, "data": user})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/usuarios/<usuario_id>', methods=['PUT'])
+@jwt_required()
+@athos_owner_required
+def athos_update_usuario(usuario_id):
+    try:
+        data = request.get_json()
+        updated = supabase.table('users').update(data).eq('id', usuario_id).execute().data[0]
+        return jsonify({"success": True, "data": updated})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/athos/usuarios/<usuario_id>', methods=['DELETE'])
+@jwt_required()
+@athos_owner_required
+def athos_delete_usuario(usuario_id):
+    try:
+        supabase.table('users').delete().eq('id', usuario_id).execute()
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})

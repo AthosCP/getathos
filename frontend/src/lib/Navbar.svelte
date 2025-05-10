@@ -2,7 +2,13 @@
   import { goto } from '$app/navigation';
   import { auth } from '$lib/auth';
 
-  export let active: 'dashboard' | 'users' | 'policies' | 'navigation' = 'dashboard';
+  export let active: string = 'dashboard';
+  export let links: { label: string; href: string; id: string }[] = [
+    { label: 'Dashboard', href: '/dashboard', id: 'dashboard' },
+    { label: 'Usuarios', href: '/users', id: 'users' },
+    { label: 'Políticas', href: '/policies', id: 'policies' },
+    { label: 'Navegación', href: '/navigation', id: 'navigation' }
+  ];
 
   function logout() {
     auth.logout();
@@ -18,18 +24,14 @@
           <h1 class="text-xl font-bold text-indigo-600">Athos</h1>
         </div>
         <div class="ml-6 flex space-x-8">
-          <a href="/dashboard" class="inline-flex items-center px-1 pt-1 text-gray-500 hover:text-gray-700 {active === 'dashboard' ? 'border-b-2 border-indigo-500 text-gray-900' : ''}">
-            Dashboard
-          </a>
-          <a href="/users" class="inline-flex items-center px-1 pt-1 text-gray-500 hover:text-gray-700 {active === 'users' ? 'border-b-2 border-indigo-500 text-gray-900' : ''}">
-            Usuarios
-          </a>
-          <a href="/policies" class="inline-flex items-center px-1 pt-1 text-gray-500 hover:text-gray-700 {active === 'policies' ? 'border-b-2 border-indigo-500 text-gray-900' : ''}">
-            Políticas
-          </a>
-          <a href="/navigation" class="inline-flex items-center px-1 pt-1 text-gray-500 hover:text-gray-700 {active === 'navigation' ? 'border-b-2 border-indigo-500 text-gray-900' : ''}">
-            Navegación
-          </a>
+          {#each links as link}
+            <a
+              href={link.href}
+              class="inline-flex items-center px-1 pt-1 text-gray-500 hover:text-gray-700 {active === link.id ? 'border-b-2 border-indigo-500 text-gray-900' : ''}"
+            >
+              {link.label}
+            </a>
+          {/each}
         </div>
       </div>
       <div class="flex items-center">

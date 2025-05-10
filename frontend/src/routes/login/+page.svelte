@@ -38,6 +38,8 @@
           goto('/admin/dashboard');
         } else if (data.role === 'client') {
           goto('/dashboard');
+        } else if (data.role === 'athos_owner') {
+          goto('/athos/dashboard');
         } else {
           goto('/login');
         }
@@ -56,6 +58,7 @@
     if (auth.user) {
       if (auth.user.role === 'admin') goto('/admin/dashboard');
       else if (auth.user.role === 'client') goto('/dashboard');
+      else if (auth.user.role === 'athos_owner') goto('/athos/dashboard');
     }
   });
 </script>
