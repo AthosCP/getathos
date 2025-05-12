@@ -4,8 +4,9 @@
   "description": "Control de navegación web para empresas",
   "scripts": {
     "dev": "vite",
-    "build": "NODE_ENV=production vite build",
-    "preview": "vite preview"
+    "build": "vite build && node copy-static.js",
+    "preview": "vite preview",
+    "build:copy": "rm -rf dist && mkdir dist && cp background.js popup.js popup.html blocked.html manifest.json icon*.png dist/"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.260",

@@ -1,54 +1,64 @@
-import { Storage } from "@plasmohq/storage"
-
-const storage = new Storage()
-const API_URL = "http://localhost:5001"
-
-// Función para verificar si una URL está bloqueada
-async function checkUrl(url) {
+// --- NUEVO: Sincronización de dominios prohibidos ---
+async function syncProhibidos() {
+  const { jwt_token } = await chrome.storage.local.get('jwt_token');
+  if (!jwt_token) return;
   try {
-    // Usar chrome.storage.local para consistencia con popup.js
-    const { jwt_token } = await chrome.storage.local.get('jwt_token')
-    if (!jwt_token) {
-      console.log("No hay token disponible")
-      return false
-    }
-
-    const domain = new URL(url).hostname
-    console.log("Verificando dominio:", domain)
-
-    const response = await fetch(`${API_URL}/api/policies`, {
+    const response = await fetch(`${API_URL}/api/prohibidos`, {
       headers: {
         'Authorization': `Bearer ${jwt_token}`,
         'Content-Type': 'application/json'
       }
-    })
-
-    if (!response.ok) {
-      console.error("Error en la respuesta:", response.status, response.statusText)
-      return false
-    }
-
-    const data = await response.json()
-    console.log("Políticas recibidas:", data)
-
-    if (!data.success) {
-      console.error("Error en los datos:", data.error)
-      return false
-    }
-
-    // Buscar políticas que coincidan con el dominio
-    const policies = data.data
-    // Mejorar la lógica de matching para evitar falsos positivos
-    const matchingPolicy = policies.find(p => {
-      // Verificar dominio exacto o subdominio
-      const domainMatches = domain === p.domain || domain.endsWith('.' + p.domain);
-      // Verificar acción de bloqueo
-      return domainMatches && p.action === 'block';
     });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.success && data.data) {
+      await chrome.storage.local.set({
+        prohibidos: data.data,
+        prohibidos_last_sync: Date.now()
+      });
+      console.log('[SYNC] Lista de prohibidos actualizada');
+    }
+  } catch (e) {
+    console.error('[SYNC] Error al sincronizar prohibidos:', e);
+  }
+}
 
-    if (matchingPolicy) {
-      console.log("Política encontrada:", matchingPolicy)
-      // Registrar el bloqueo
+// Sincronizar al login y cada hora
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.jwt_token) {
+    syncProhibidos();
+  }
+});
+chrome.runtime.onInstalled.addListener(() => {
+  syncProhibidos();
+  setInterval(syncProhibidos, 60 * 60 * 1000); // Cada hora
+});
+setInterval(syncProhibidos, 60 * 60 * 1000); // Refresco extra por si acaso
+
+// Función para verificar si una URL está bloqueada
+async function checkUrl(url) {
+  try {
+    const { jwt_token, prohibidos, prohibidos_last_sync } = await chrome.storage.local.get(['jwt_token', 'prohibidos', 'prohibidos_last_sync']);
+    if (!jwt_token) {
+      console.log('No hay token disponible');
+      return false;
+    }
+    // Refrescar lista si han pasado más de 1 hora
+    if (!prohibidos || !prohibidos_last_sync || (Date.now() - prohibidos_last_sync > 60 * 60 * 1000)) {
+      await syncProhibidos();
+    }
+    const domain = new URL(url).hostname.replace(/^www\./, '');
+    let foundCategory = null;
+    if (prohibidos) {
+      for (const [category, domains] of Object.entries(prohibidos)) {
+        if (domains.some(d => domain === d || domain.endsWith('.' + d))) {
+          foundCategory = category;
+          break;
+        }
+      }
+    }
+    if (foundCategory) {
+      // Registrar el intento en el backend
       try {
         await fetch(`${API_URL}/api/navigation_logs`, {
           method: 'POST',
@@ -60,19 +70,19 @@ async function checkUrl(url) {
             domain,
             url,
             action: 'bloqueado',
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            policy_info: { block_reason: 'prohibited_list', category: foundCategory }
           })
-        })
-      } catch (error) {
-        console.error("Error al registrar bloqueo:", error)
+        });
+      } catch (e) {
+        console.error('[SYNC] Error registrando intento bloqueado:', e);
       }
-      return true
+      return true;
     }
-
-    return false
+    return false;
   } catch (error) {
-    console.error("Error checking URL:", error)
-    return false
+    console.error('Error checking URL:', error);
+    return false;
   }
 }
 
@@ -200,7 +210,7 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
         type: 'basic',
         iconUrl: 'icon128.png',
         title: 'Sitio Bloqueado',
-        message: `El acceso a ${domain} ha sido bloqueado por políticas de la organización.`,
+        message: `El acceso a ${domain} ha sido bloqueado por políticas de la empresa.`,
         priority: 2
       });
       

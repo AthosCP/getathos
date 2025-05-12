@@ -906,7 +906,29 @@ def create_navigation_log():
         
         # Usar user_supabase en lugar de supabase para respetar RLS
         new_log = user_supabase.table('navigation_logs').insert(log_data).execute()
-        
+
+        # --- NUEVO: Actualizar alert_stats para cualquier bloqueo ---
+        if action == 'bloqueado' and tenant_id:
+            # Si no se encontró categoría antes, usar 'política' por defecto
+            final_category = category_found or 'política'
+            try:
+                print(f"DEBUG: Actualizando alert_stats para tenant {tenant_id}, categoría {final_category}")
+                existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', final_category).maybe_single()
+                existing_stat_res = existing_stat_query.execute()
+                if existing_stat_res.data:
+                    stat_id = existing_stat_res.data['id']
+                    current_count = existing_stat_res.data['count']
+                    update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
+                    update_query.execute()
+                    print(f"DEBUG: Estadística actualizada para tenant {tenant_id}, categoría {final_category}")
+                else:
+                    insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': final_category, 'count': 1})
+                    insert_query.execute()
+                    print(f"DEBUG: Nueva estadística creada para tenant {tenant_id}, categoría {final_category}")
+            except Exception as stat_error:
+                print(f"DEBUG: Error actualizando estadísticas para {tenant_id}/{final_category}: {stat_error}")
+        # --- FIN NUEVO ---
+
         # Devolver también la acción determinada para que la extensión la use
         print(f"DEBUG: Acción determinada para la navegación: {action}")
         return jsonify({"success": True, "data": new_log.data[0], "determined_action": action})
@@ -1445,6 +1467,21 @@ def get_alerts():
         import traceback
         print(f"Error en get_alerts: {str(e)}")
         print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/prohibidos', methods=['GET'])
+def get_prohibidos():
+    try:
+        # Cargar el archivo prohibidos.json
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_dir, 'prohibidos.json')
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Excluir la categoría 'recomendaciones' si existe
+        data = {k: v for k, v in data.items() if k != 'recomendaciones'}
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        print(f"Error al leer prohibidos.json: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':

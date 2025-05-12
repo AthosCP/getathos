@@ -2,11 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const filesToCopy = [
-  'manifest.json',
-  'icon16.png',
-  'icon32.png',
-  'icon48.png',
-  'icon128.png'
+  'public/manifest.json',
+  'public/icon16.png',
+  'public/icon32.png',
+  'public/icon48.png',
+  'public/icon128.png',
+  'popup.css'
 ];
 
 const distDir = path.join(__dirname, 'dist');
@@ -17,9 +18,9 @@ if (!fs.existsSync(distDir)) {
 
 for (const file of filesToCopy) {
   const src = path.join(__dirname, file);
-  const dest = path.join(distDir, file);
+  const dest = path.join(distDir, path.basename(file));
   fs.copyFileSync(src, dest);
-  console.log(`Copiado: ${file} -> dist/${file}`);
+  console.log(`Copiado: ${file} -> dist/${path.basename(file)}`);
 }
 
 // Copiar y modificar popup.html
