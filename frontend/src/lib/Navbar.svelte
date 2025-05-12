@@ -7,7 +7,8 @@
     { label: 'Dashboard', href: '/dashboard', id: 'dashboard' },
     { label: 'Usuarios', href: '/users', id: 'users' },
     { label: 'Políticas', href: '/policies', id: 'policies' },
-    { label: 'Navegación', href: '/navigation', id: 'navigation' }
+    { label: 'Navegación', href: '/navigation', id: 'navigation' },
+    { label: 'Alertas', href: '/alerts', id: 'alerts' }
   ];
 
   function logout() {

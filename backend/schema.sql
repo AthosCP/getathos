@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS navigation_logs (
     policy_info JSONB DEFAULT NULL
 );
 
+-- Tabla de estadísticas de alertas
+CREATE TABLE IF NOT EXISTS alert_stats (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    count INTEGER DEFAULT 0,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
 -- Habilitar RLS en las tablas
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_configs ENABLE ROW LEVEL SECURITY;
@@ -176,4 +185,27 @@ FOR INSERT
 WITH CHECK (
   tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
   AND (auth.jwt() ->> 'role')::text = 'client'
-); 
+);
+
+-- Habilitar RLS en la tabla alert_stats
+ALTER TABLE alert_stats ENABLE ROW LEVEL SECURITY;
+
+-- Política para permitir a los usuarios ver las estadísticas de su tenant
+CREATE POLICY "Usuarios ven estadísticas de su tenant"
+ON alert_stats
+FOR SELECT
+USING (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+);
+
+-- Política para permitir a los administradores ver todas las estadísticas
+CREATE POLICY "Administradores ven todas las estadísticas"
+ON alert_stats
+FOR SELECT
+USING (
+    (auth.jwt() ->> 'role')::text = 'admin'
+);
+
+-- Índices para mejorar el rendimiento
+CREATE INDEX IF NOT EXISTS idx_alert_stats_tenant_id ON alert_stats(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_alert_stats_category ON alert_stats(category); 

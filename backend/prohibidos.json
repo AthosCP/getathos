@@ -1,0 +1,109 @@
+{
+    "contenido para adultos": [
+      "pornhub.com",
+      "xvideos.com",
+      "youporn.com",
+      "redtube.com",
+      "8tube.xxx",
+      "xhamster.com",
+      "tube8.com",
+      "xnxx.com",
+      "chaturbate.com",
+      "bongacams.com",
+      "myfreecams.com",
+      "livejasmin.com"
+    ],
+    "apuestas/juegos de azar": [
+      "stake.com",
+      "bet365.com",
+      "williamhill.com",
+      "betway.com",
+      "888casino.com",
+      "betfair.com",
+      "pokerstars.com",
+      "draftkings.com",
+      "casumo.com",
+      "parimatch.com"
+    ],
+    "drogas": [
+      "1-online-pharm.com",
+      "1-pharm.com",
+      "2-day-meds.com",
+      "123drugsonline.com",
+      "generics-online.com",
+      "best-onlinepharmacy.org",
+      "pharmacy.net",
+      "7pills.com",
+      "24hourspharmacy.com",
+      "australian-online-pharmacy.com"
+    ],
+    "violencia/terrorismo": [
+      "shamikh1.info",
+      "alminbar.net",
+      "islahcenter.ru",
+      "shariah4belgium.com",
+      "takfirwalhijra.org",
+      "dawaeislam.com",
+      "globaljihads.net",
+      "nashir-news.net",
+      "sinjarnews.com",
+      "ansar1.biz"
+    ],
+    "pirater\u00eda digital": [
+      "thepiratebay.org",
+      "yts.mx",
+      "1337x.to",
+      "rarbg.to",
+      "limetorrents.info",
+      "eztv.re",
+      "torrentgalaxy.to",
+      "nyaa.si",
+      "skidrowreloaded.com",
+      "igg-games.com",
+      "123movies.to",
+      "fmovies.to"
+    ],
+    "discursos de odio": [
+      "stormfront.org",
+      "amren.com",
+      "vnnforum.com",
+      "dailystormer.name",
+      "theoccidentalobserver.net",
+      "goyimtv.com",
+      "redice.tv",
+      "rabbleforum.com",
+      "kkk.com",
+      "whitepride.org"
+    ],
+    "hackeo/actividades ilegales": [
+      "hackforums.net",
+      "exploit.in",
+      "0day.today",
+      "breachforums.com",
+      "7b3.ru",
+      "hacksecure.net",
+      "cybercrimeportal.com",
+      "leakforums.ws",
+      "cardingonly.com",
+      "darkode.pw"
+    ],
+    "estafas": [
+      "bitconnect.co",
+      "onecoin.eu",
+      "cloudminerbuddy.com",
+      "faketoken.net",
+      "scam-watch.info",
+      "lottery-claim-win.com",
+      "giftcards4u.com",
+      "cryptocaperez.com",
+      "profit-trade-zone.com",
+      "bitcoin-ai1.com"
+    ],
+    "recomendaciones": [
+      "Utilizar APIs de navegaci\u00f3n segura (p. ej. Google Safe Browsing) para detectar sitios maliciosos en tiempo real.",
+      "Mantener la lista sincronizada con fuentes p\u00fablicas actualizadas (como Blocklist Project, PhishTank u Open Threat Exchange) que provean dominios maliciosos conocidos.",
+      "Monitorizar informes de organizaciones de seguridad (CERT, FS-ISAC, ENISA, etc.) sobre nuevos dominios peligrosos y agregarlos al listado.",
+      "Implementar actualizaciones per\u00f3dicas autom\u00e1ticas para añadir nuevos sitios bloqueados y eliminar dominios obsoletos o desactivados."
+    ]
+  }
+  

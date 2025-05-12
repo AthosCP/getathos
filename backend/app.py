@@ -7,9 +7,35 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, create_access_token, get_jwt, verify_jwt_in_request
 from supabase.lib.client_options import ClientOptions
+import json # Importar json
+import requests
+from urllib.parse import urlparse
+import hashlib
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Función para verificar una URL usando Google Web Risk API
+def check_url_with_webrisk(url):
+    api_key = os.getenv('GOOGLE_WEBRISK_API_KEY')
+    endpoint = f"https://webrisk.googleapis.com/v1/uris:search?key={api_key}"
+    params = {
+        "uri": url if url.startswith('http') else f"http://{url}",
+        "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE"]
+    }
+    try:
+        response = requests.get(endpoint, params=params)
+        data = response.json()
+        if "threat" in data:
+            return {
+                "threat_found": True,
+                "category": data["threat"]["threatTypes"],
+                "url": params["uri"]
+            }
+        return None
+    except Exception as e:
+        print(f"Error consultando Web Risk REST: {e}")
+        return None
 
 app = Flask(__name__)
 # Configuración de JWT
@@ -735,13 +761,27 @@ def get_navigation_logs():
         print(f"Error en get_navigation_logs: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 400
 
+# Cargar la lista de sitios prohibidos al iniciar
+prohibited_sites = {}
+try:
+    # Usar una ruta absoluta o relativa adecuada
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(script_dir, 'prohibidos.json')
+    with open(file_path, 'r', encoding='utf-8') as f: # Especificar encoding
+        prohibited_sites = json.load(f)
+    print("Lista de sitios prohibidos cargada exitosamente.")
+except FileNotFoundError:
+    print(f"Advertencia: archivo prohibidos.json no encontrado en {file_path}. La verificación de categorías no funcionará.")
+except json.JSONDecodeError:
+    print("Error: El archivo prohibidos.json no es un JSON válido.")
+
 @app.route('/api/navigation_logs', methods=['POST'])
 @jwt_required()
 def create_navigation_log():
     try:
         # Obtener datos del JWT
         claims = get_jwt()
-        user_id = claims.get('sub')  # ID del usuario desde el JWT
+        user_id = claims.get('sub')
         tenant_id = claims.get('tenant_id')
         
         # Obtener el token JWT para pasar a Supabase
@@ -753,26 +793,103 @@ def create_navigation_log():
         domain = data.get('domain')
         url = data.get('url')
         timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
-        action = data.get('action')
-        policy_info = None
         
-        print(f"Registrando navegación: {domain} ({action}) por usuario {user_id}")
+        print(f"DEBUG: Recibido para navegación - domain: {domain}, url: {url}")
+        
+        # Verificar si el dominio está en la lista de prohibidos
+        action = 'visitado' # Acción por defecto
+        category_found = None
+        policy_info = {} # Inicializar policy_info como dict
 
-        # Si la acción es "bloqueado", buscar la política activa
-        if action == 'bloqueado':
-            policy_query = user_supabase.table('policies').select('*')
-            if tenant_id:
-                policy_query = policy_query.eq('tenant_id', tenant_id)
-            policy_query = policy_query.eq('domain', domain).eq('action', 'block')
-            policy = policy_query.execute()
-            
-            if policy.data:
-                p = policy.data[0]
-                policy_info = {
-                    "policy_id": p.get('id'),
-                    "action": p.get('action'),
-                    "created_at": p.get('created_at')
-                }
+        # Normalizar dominio (ej. quitar www.)
+        normalized_domain = domain.replace('www.', '') if domain else ''
+
+        print('DEBUG: Chequeando lista prohibida...')
+        # PASO 1: Verificar en la lista local de sitios prohibidos
+        for category, domains in prohibited_sites.items():
+            # Ignorar la categoría 'recomendaciones' si existe
+            if category == 'recomendaciones':
+                continue
+            # Normalizar dominios de la lista
+            normalized_list = [d.replace('www.', '') for d in domains]
+            if normalized_domain in normalized_list:
+                action = 'bloqueado'
+                category_found = category
+                print(f"DEBUG: Dominio '{domain}' (normalizado: {normalized_domain}) encontrado en categoría prohibida: '{category_found}'")
+                
+                # Actualizar estadísticas de alertas
+                if tenant_id and category_found:
+                    try:
+                        print(f"DEBUG: Actualizando estadísticas para tenant {tenant_id}, categoría {category_found}")
+                        existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', category_found).maybe_single()
+                        existing_stat_res = existing_stat_query.execute()
+
+                        if existing_stat_res.data:
+                            stat_id = existing_stat_res.data['id']
+                            current_count = existing_stat_res.data['count']
+                            update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
+                            update_query.execute()
+                            print(f"DEBUG: Estadística actualizada para tenant {tenant_id}, categoría {category_found}")
+                        else:
+                            insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': category_found, 'count': 1})
+                            insert_query.execute()
+                            print(f"DEBUG: Nueva estadística creada para tenant {tenant_id}, categoría {category_found}")
+                    except Exception as stat_error:
+                         print(f"DEBUG: Error actualizando estadísticas para {tenant_id}/{category_found}: {stat_error}")
+                policy_info['block_reason'] = 'prohibited_list'
+                policy_info['category'] = category_found
+                break # Salir del loop una vez encontrado
+
+        print('DEBUG: Chequeando Google Web Risk...')
+        # PASO 2: Si no fue bloqueado por la lista local, verificar con Google Web Risk
+        if action != 'bloqueado' and os.getenv('GOOGLE_WEBRISK_API_KEY'):
+            webrisk_result = check_url_with_webrisk(url or domain)
+            print(f"DEBUG: Resultado de Web Risk: {webrisk_result}")
+            if webrisk_result:
+                action = 'bloqueado'
+                category_found = webrisk_result.get('category')
+                print(f"DEBUG: URL/Dominio '{url or domain}' bloqueado por Google Web Risk. Categoría: {category_found}")
+                # Actualizar estadísticas de alertas para amenazas de Web Risk
+                if tenant_id and category_found:
+                    try:
+                        print(f"DEBUG: Actualizando estadísticas de Web Risk para tenant {tenant_id}, categoría {category_found}")
+                        existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', category_found).maybe_single()
+                        existing_stat_res = existing_stat_query.execute()
+                        if existing_stat_res.data:
+                            stat_id = existing_stat_res.data['id']
+                            current_count = existing_stat_res.data['count']
+                            update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
+                            update_query.execute()
+                            print(f"DEBUG: Estadística Web Risk actualizada para tenant {tenant_id}, categoría {category_found}")
+                        else:
+                            insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': category_found, 'count': 1})
+                            insert_query.execute()
+                            print(f"DEBUG: Nueva estadística Web Risk creada para tenant {tenant_id}, categoría {category_found}")
+                    except Exception as webrisk_stat_error:
+                        print(f"DEBUG: Error actualizando estadísticas de Web Risk para {tenant_id}/{category_found}: {webrisk_stat_error}")
+                policy_info['block_reason'] = 'google_web_risk'
+                policy_info['category'] = category_found
+                policy_info['threat_details'] = webrisk_result
+
+        print('DEBUG: Chequeando políticas de la base de datos...')
+        # PASO 3: Si no fue bloqueado por la lista prohibida o Web Risk, verificar políticas de 'allow'/'block' de la BD
+        if action != 'bloqueado':
+             policy_query = user_supabase.table('policies').select('*').eq('domain', domain)
+             if tenant_id:
+                 policy_query = policy_query.eq('tenant_id', tenant_id)
+             policy = policy_query.order('created_at', desc=True).execute() # Priorizar la más reciente
+
+             if policy.data:
+                 p = policy.data[0]
+                 db_action = p.get('action') # 'allow' o 'block'
+                 if db_action == 'block':
+                      action = 'bloqueado'
+                      policy_info['policy_id'] = p.get('id')
+                      policy_info['block_reason'] = 'database_policy'
+                 elif db_action == 'allow':
+                      action = 'permitido' # Marcar como permitido explícitamente
+                      policy_info['policy_id'] = p.get('id')
+             # Si no hay política explícita y no estaba en prohibidos.json, se considera 'visitado'
 
         # Insertar el registro en navigation_logs
         log_data = {
@@ -782,17 +899,22 @@ def create_navigation_log():
             "url": url,
             "timestamp": timestamp,
             "action": action,
-            "policy_info": policy_info
+            "policy_info": policy_info if policy_info else None # Guardar None si está vacío
         }
         
-        # Log para depuración
-        print(f"Datos de log a insertar: {log_data}")
+        print(f"DEBUG: Datos de log a insertar: {log_data}")
         
         # Usar user_supabase en lugar de supabase para respetar RLS
         new_log = user_supabase.table('navigation_logs').insert(log_data).execute()
-        return jsonify({"success": True, "data": new_log.data[0]})
+        
+        # Devolver también la acción determinada para que la extensión la use
+        print(f"DEBUG: Acción determinada para la navegación: {action}")
+        return jsonify({"success": True, "data": new_log.data[0], "determined_action": action})
+        
     except Exception as e:
-        print(f"Error en create_navigation_log: {str(e)}")
+        import traceback
+        print(f"DEBUG: Error en create_navigation_log: {str(e)}")
+        print(traceback.format_exc()) # Imprimir traceback completo
         return jsonify({"success": False, "error": str(e)}), 400
 
 @app.route('/api/navigation_logs/block', methods=['POST'])
@@ -1294,6 +1416,36 @@ def athos_delete_usuario(usuario_id):
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+# --- ENDPOINT: ALERTAS (EXISTENTE, AHORA LEE alert_stats) ---
+@app.route('/api/alerts', methods=['GET'])
+@jwt_required()
+def get_alerts():
+    try:
+        claims = get_jwt()
+        tenant_id = claims.get('tenant_id')
+        role = claims.get('role')
+
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        query = user_supabase.table('alert_stats').select('*')
+
+        # RLS ya debería filtrar por tenant_id para 'client' y 'user'
+        # Si es admin, RLS permite ver todo.
+
+        alert_stats_res = query.order('last_updated', desc=True).execute()
+
+        print(f"Estadísticas obtenidas para tenant {tenant_id} (rol {role}): {len(alert_stats_res.data)}")
+
+        # Devolvemos las estadísticas directamente.
+        return jsonify({"success": True, "data": alert_stats_res.data})
+
+    except Exception as e:
+        import traceback
+        print(f"Error en get_alerts: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
     import os
