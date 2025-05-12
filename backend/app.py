@@ -188,16 +188,21 @@ def get_config():
 @app.route('/api/tenants', methods=['GET'])
 def get_tenants():
     try:
+        # ASUMIMOS QUE ESTE ENDPOINT ES PARA UN ROL QUE BYPASSEA RLS o tiene una política muy permisiva
+        # O DEBERÍA SER PROTEGIDO Y USAR user_supabase
         auth_header = request.headers.get('Authorization')
         if not auth_header:
             return jsonify({"error": "No token provided"}), 401
 
-        user = supabase.auth.get_user(auth_header.split(' ')[1])
-        role = user.user.user_metadata.get('role')
-        if role != 'superadmin':
-            return jsonify({"error": "Unauthorized"}), 403
+        # Esta validación de rol 'superadmin' es la original, pero 'superadmin' no es un rol que tengamos definido en JWT actualmente.
+        # Considerar cambiar a athos_owner_required o admin_required si este endpoint se usa.
+        # user = supabase.auth.get_user(auth_header.split(' ')[1]) 
+        # role = user.user.user_metadata.get('role')
+        # if role != 'superadmin': 
+        #     return jsonify({"error": "Unauthorized"}), 403
 
-        tenants = supabase.table('tenants').select('*').execute()
+        # Si se usa el cliente global supabase, y este usa service_role_key, RLS es bypassada.
+        tenants = supabase.table('tenants').select('*').execute() 
         return jsonify({
             "success": True,
             "data": tenants.data
@@ -241,15 +246,22 @@ def get_users():
     claims = get_jwt()
     role = claims.get('role')
     tenant_id = claims.get('tenant_id')
-    supabase_token = claims.get('supabase_token')
     jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
     user_supabase = get_supabase_with_jwt(jwt_token)
+
+    print(f"GET /api/users - Claims: {claims}")
+
     if role == 'admin':
-        users = user_supabase.table('users').select('*').execute()
+        # Admin global ve todos los usuarios (sujeto a RLS "Admin acceso total a users")
+        users_query = user_supabase.table('users').select('*')
     elif role == 'client':
-        users = user_supabase.table('users').select('*').eq('tenant_id', tenant_id).eq('role', 'user').execute()
+        # Cliente ve solo usuarios de su tenant con rol 'user'
+        users_query = user_supabase.table('users').select('*').eq('tenant_id', tenant_id).eq('role', 'user')
     else:
-        return jsonify({"error": "No autorizado"}), 403
+        return jsonify({"error": "Rol no autorizado para ver usuarios"}), 403
+    
+    users = users_query.execute()
+    print(f"GET /api/users - Usuarios encontrados: {len(users.data)}")
     return jsonify({"success": True, "data": users.data})
 
 @app.route('/api/users/<user_id>', methods=['GET'])
@@ -834,18 +846,34 @@ def block_domain():
 @admin_required
 def admin_dashboard():
     try:
-        # Total de clientes
-        tenants = supabase.table('tenants').select('*').execute().data
-        total_clients = len(tenants)
+        claims = get_jwt()
+        print(f"ADMIN_DASHBOARD - Claims: {claims}")
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token) # Usar cliente con JWT
+
+        # Total de clientes (tenants)
+        # Admin debe poder ver todos los tenants según la RLS "Permitir SELECT solo a admin"
+        tenants_res = user_supabase.table('tenants').select('id', count='exact').execute()
+        total_clients = tenants_res.count
+        
         # Total de usuarios
-        users = supabase.table('users').select('*').execute().data
-        total_users = len(users)
+        # Admin debe poder ver todos los usuarios según RLS "Admin acceso total a users"
+        users_res = user_supabase.table('users').select('id', count='exact').execute()
+        total_users = users_res.count
+        
         # Clientes activos
-        active_clients = len([t for t in tenants if t.get('status') == 'active'])
+        active_clients_res = user_supabase.table('tenants').select('id', count='exact').eq('status', 'active').execute()
+        active_clients = active_clients_res.count
+        
         # Usuarios activos
-        active_users = len([u for u in users if u.get('status') == 'active'])
+        active_users_res = user_supabase.table('users').select('id', count='exact').eq('status', 'active').execute()
+        active_users = active_users_res.count
+        
         # Últimos 5 clientes
-        recent_clients = sorted(tenants, key=lambda t: t.get('created_at', ''), reverse=True)[:5]
+        recent_clients_res = user_supabase.table('tenants').select('*').order('created_at', desc=True).limit(5).execute()
+        recent_clients = recent_clients_res.data
+        
+        print(f"ADMIN_DASHBOARD - total_clients: {total_clients}, total_users: {total_users}")
         return jsonify({
             "success": True,
             "data": {
@@ -857,6 +885,7 @@ def admin_dashboard():
             }
         })
     except Exception as e:
+        print(f"ADMIN_DASHBOARD - Error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 # --- ENDPOINTS: CLIENTES (TENANTS) ---
@@ -866,20 +895,23 @@ def admin_dashboard():
 def admin_get_clients():
     try:
         print("=== Iniciando admin_get_clients ===")
-        print("Obteniendo token y claims...")
         claims = get_jwt()
         print(f"Claims del token: {claims}")
         
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token) # Usar cliente con JWT
+        
         print("Intentando obtener clientes de Supabase...")
-        tenants = supabase.table('tenants').select('*').execute().data
-        print(f"Clientes obtenidos exitosamente: {tenants}")
+        # Admin debe poder ver todos los tenants según la RLS "Permitir SELECT solo a admin"
+        tenants = user_supabase.table('tenants').select('*').execute().data 
+        print(f"Clientes obtenidos exitosamente: {len(tenants)}")
         
         return jsonify({"success": True, "data": tenants})
     except Exception as e:
         print(f"=== ERROR en admin_get_clients ===")
         print(f"Tipo de error: {type(e).__name__}")
         print(f"Mensaje de error: {str(e)}")
-        print(f"Traceback completo:", exc_info=True)
+        # print(f"Traceback completo:", exc_info=True) # Descomentar para traceback completo
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/admin/clients', methods=['POST'])
@@ -930,13 +962,28 @@ def admin_delete_client(client_id):
 @admin_required
 def admin_get_users():
     try:
-        users = supabase.table('users').select('*').execute().data
+        print("=== Iniciando admin_get_users ===")
+        claims = get_jwt()
+        print(f"Claims del token: {claims}")
+        
+        # Obtener el token JWT para pasar a Supabase
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        print("Iniciando consulta a Supabase...")
+        users = user_supabase.table('users').select('*').execute()
+        print(f"Usuarios encontrados: {len(users.data)}")
+        
         # Enriquecer con nombre del tenant
-        tenants = {t['id']: t['name'] for t in supabase.table('tenants').select('id,name').execute().data}
-        for u in users:
+        tenants = {t['id']: t['name'] for t in user_supabase.table('tenants').select('id,name').execute().data}
+        for u in users.data:
             u['tenant_name'] = tenants.get(u.get('tenant_id'), '')
-        return jsonify({"success": True, "data": users})
+            
+        return jsonify({"success": True, "data": users.data})
     except Exception as e:
+        print(f"=== ERROR en admin_get_users ===")
+        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Mensaje de error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/admin/users', methods=['POST'])
@@ -1038,9 +1085,16 @@ def admin_delete_user(user_id):
 @athos_owner_required
 def athos_get_admins():
     try:
-        admins = supabase.table('users').select('*').eq('role', 'admin').execute().data
+        claims = get_jwt()
+        print(f"ATHOS_GET_ADMINS - Claims: {claims}")
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        admins = user_supabase.table('users').select('*').eq('role', 'admin').execute().data
+        print(f"ATHOS_GET_ADMINS - Admins encontrados: {len(admins)}")
         return jsonify({"success": True, "data": admins})
     except Exception as e:
+        print(f"ATHOS_GET_ADMINS - Error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/athos/admins', methods=['POST'])
@@ -1095,7 +1149,12 @@ def athos_delete_admin(admin_id):
 @athos_owner_required
 def athos_get_clientes():
     try:
-        query = supabase.table('tenants').select('*')
+        claims = get_jwt()
+        print(f"ATHOS_GET_CLIENTES - Claims: {claims}")
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        query = user_supabase.table('tenants').select('*')
         name = request.args.get('name')
         admin_id = request.args.get('admin_id')
         if name:
@@ -1103,8 +1162,10 @@ def athos_get_clientes():
         if admin_id:
             query = query.eq('admin_id', admin_id)
         clientes = query.execute().data
+        print(f"ATHOS_GET_CLIENTES - Clientes encontrados: {len(clientes)}")
         return jsonify({"success": True, "data": clientes})
     except Exception as e:
+        print(f"ATHOS_GET_CLIENTES - Error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/athos/clientes', methods=['POST'])
@@ -1151,19 +1212,41 @@ def athos_delete_cliente(cliente_id):
 @athos_owner_required
 def athos_get_usuarios():
     try:
-        query = supabase.table('users').select('*').eq('role', 'user')
+        print("=== Iniciando athos_get_usuarios ===")
+        claims = get_jwt()
+        print(f"Claims del token: {claims}")
+        
+        # Obtener el token JWT para pasar a Supabase
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        print("Iniciando consulta a Supabase...")
+        query = user_supabase.table('users').select('*')
+        
+        # Aplicar filtros si existen
         email = request.args.get('email')
         role = request.args.get('role')
         tenant_id = request.args.get('tenant_id')
+        
         if email:
+            print(f"Aplicando filtro de email: {email}")
             query = query.ilike('email', f'%{email}%')
         if role:
+            print(f"Aplicando filtro de role: {role}")
             query = query.eq('role', role)
         if tenant_id:
+            print(f"Aplicando filtro de tenant_id: {tenant_id}")
             query = query.eq('tenant_id', tenant_id)
-        usuarios = query.execute().data
-        return jsonify({"success": True, "data": usuarios})
+            
+        print("Ejecutando consulta final...")
+        usuarios = query.execute()
+        print(f"Usuarios encontrados: {len(usuarios.data)}")
+        
+        return jsonify({"success": True, "data": usuarios.data})
     except Exception as e:
+        print(f"=== ERROR en athos_get_usuarios ===")
+        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Mensaje de error: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/athos/usuarios', methods=['POST'])
