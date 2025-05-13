@@ -4,7 +4,7 @@
   "description": "Control de navegación web para empresas",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node copy-static.js",
+    "build": "vite build && node copy-static.js && node fix-popup-html.js",
     "preview": "vite preview",
     "build:copy": "rm -rf dist && mkdir dist && cp background.js popup.js popup.html blocked.html manifest.json icon*.png dist/"
   },

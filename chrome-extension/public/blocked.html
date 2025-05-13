@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sitio Bloqueado - Athos Web Control</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 32px;
+      text-align: center;
+    }
+    .icon {
+      width: 128px;
+      height: 128px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      color: #660000;
+      margin-bottom: 16px;
+    }
+    .url {
+      color: #666;
+      word-break: break-all;
+      margin-bottom: 24px;
+    }
+    .message {
+      background-color: #fff5f5;
+      border: 1px solid #ffcccc;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+  <img src="icon128.png" alt="Athos Web Control" class="icon">
+  <h1>Sitio Bloqueado</h1>
+  <div class="url" id="blockedUrl"></div>
+  <div class="message">
+    Este sitio ha sido bloqueado por políticas de seguridad de la organización.
+    Si crees que esto es un error, contacta con el administrador.
+  </div>
+  <script>
+    // Obtener información de la URL bloqueada
+    document.addEventListener('DOMContentLoaded', function() {
+      // Mostrar dominio bloqueado
+      const queryParams = new URLSearchParams(window.location.search);
+      const blockedUrl = queryParams.get('url') || window.location.href;
+      
+      try {
+        const domain = new URL(blockedUrl).hostname;
+        document.getElementById('blockedUrl').textContent = domain;
+      } catch (e) {
+        document.getElementById('blockedUrl').textContent = 'Desconocido';
+      }
+    });
+  </script>
+</body>
+</html> 

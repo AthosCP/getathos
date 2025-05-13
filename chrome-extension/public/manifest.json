@@ -6,7 +6,6 @@
   "permissions": [
     "webRequest",
     "storage",
-    "declarativeNetRequest",
     "webNavigation",
     "tabs",
     "notifications"

@@ -20,4 +20,4 @@ const environments = {
 const ENVIRONMENT = process.env.NODE_ENV === 'production' ? 'production' : 'development';
 
 // Export configuration for current environment
-module.exports = environments[ENVIRONMENT]; 
+export default environments[ENVIRONMENT]; 

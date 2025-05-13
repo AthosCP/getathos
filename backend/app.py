@@ -799,7 +799,7 @@ def create_navigation_log():
         # Verificar si el dominio está en la lista de prohibidos
         action = 'visitado' # Acción por defecto
         category_found = None
-        policy_info = {} # Inicializar policy_info como dict
+        policy_info = {}
 
         # Normalizar dominio (ej. quitar www.)
         normalized_domain = domain.replace('www.', '') if domain else ''
@@ -807,89 +807,36 @@ def create_navigation_log():
         print('DEBUG: Chequeando lista prohibida...')
         # PASO 1: Verificar en la lista local de sitios prohibidos
         for category, domains in prohibited_sites.items():
-            # Ignorar la categoría 'recomendaciones' si existe
             if category == 'recomendaciones':
                 continue
-            # Normalizar dominios de la lista
             normalized_list = [d.replace('www.', '') for d in domains]
             if normalized_domain in normalized_list:
                 action = 'bloqueado'
                 category_found = category
                 print(f"DEBUG: Dominio '{domain}' (normalizado: {normalized_domain}) encontrado en categoría prohibida: '{category_found}'")
-                
-                # Actualizar estadísticas de alertas
-                if tenant_id and category_found:
-                    try:
-                        print(f"DEBUG: Actualizando estadísticas para tenant {tenant_id}, categoría {category_found}")
-                        existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', category_found).maybe_single()
-                        existing_stat_res = existing_stat_query.execute()
-
-                        if existing_stat_res.data:
-                            stat_id = existing_stat_res.data['id']
-                            current_count = existing_stat_res.data['count']
-                            update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
-                            update_query.execute()
-                            print(f"DEBUG: Estadística actualizada para tenant {tenant_id}, categoría {category_found}")
-                        else:
-                            insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': category_found, 'count': 1})
-                            insert_query.execute()
-                            print(f"DEBUG: Nueva estadística creada para tenant {tenant_id}, categoría {category_found}")
-                    except Exception as stat_error:
-                         print(f"DEBUG: Error actualizando estadísticas para {tenant_id}/{category_found}: {stat_error}")
                 policy_info['block_reason'] = 'prohibited_list'
                 policy_info['category'] = category_found
-                break # Salir del loop una vez encontrado
-
-        print('DEBUG: Chequeando Google Web Risk...')
-        # PASO 2: Si no fue bloqueado por la lista local, verificar con Google Web Risk
-        if action != 'bloqueado' and os.getenv('GOOGLE_WEBRISK_API_KEY'):
-            webrisk_result = check_url_with_webrisk(url or domain)
-            print(f"DEBUG: Resultado de Web Risk: {webrisk_result}")
-            if webrisk_result:
-                action = 'bloqueado'
-                category_found = webrisk_result.get('category')
-                print(f"DEBUG: URL/Dominio '{url or domain}' bloqueado por Google Web Risk. Categoría: {category_found}")
-                # Actualizar estadísticas de alertas para amenazas de Web Risk
-                if tenant_id and category_found:
-                    try:
-                        print(f"DEBUG: Actualizando estadísticas de Web Risk para tenant {tenant_id}, categoría {category_found}")
-                        existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', category_found).maybe_single()
-                        existing_stat_res = existing_stat_query.execute()
-                        if existing_stat_res.data:
-                            stat_id = existing_stat_res.data['id']
-                            current_count = existing_stat_res.data['count']
-                            update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
-                            update_query.execute()
-                            print(f"DEBUG: Estadística Web Risk actualizada para tenant {tenant_id}, categoría {category_found}")
-                        else:
-                            insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': category_found, 'count': 1})
-                            insert_query.execute()
-                            print(f"DEBUG: Nueva estadística Web Risk creada para tenant {tenant_id}, categoría {category_found}")
-                    except Exception as webrisk_stat_error:
-                        print(f"DEBUG: Error actualizando estadísticas de Web Risk para {tenant_id}/{category_found}: {webrisk_stat_error}")
-                policy_info['block_reason'] = 'google_web_risk'
-                policy_info['category'] = category_found
-                policy_info['threat_details'] = webrisk_result
+                break
 
         print('DEBUG: Chequeando políticas de la base de datos...')
-        # PASO 3: Si no fue bloqueado por la lista prohibida o Web Risk, verificar políticas de 'allow'/'block' de la BD
+        # PASO 2: Si no fue bloqueado por la lista prohibida, verificar políticas de la BD
         if action != 'bloqueado':
-             policy_query = user_supabase.table('policies').select('*').eq('domain', domain)
-             if tenant_id:
-                 policy_query = policy_query.eq('tenant_id', tenant_id)
-             policy = policy_query.order('created_at', desc=True).execute() # Priorizar la más reciente
-
-             if policy.data:
-                 p = policy.data[0]
-                 db_action = p.get('action') # 'allow' o 'block'
-                 if db_action == 'block':
-                      action = 'bloqueado'
-                      policy_info['policy_id'] = p.get('id')
-                      policy_info['block_reason'] = 'database_policy'
-                 elif db_action == 'allow':
-                      action = 'permitido' # Marcar como permitido explícitamente
-                      policy_info['policy_id'] = p.get('id')
-             # Si no hay política explícita y no estaba en prohibidos.json, se considera 'visitado'
+            policy_query = user_supabase.table('policies').select('*').eq('domain', domain)
+            if tenant_id:
+                policy_query = policy_query.eq('tenant_id', tenant_id)
+            policy = policy_query.order('created_at', desc=True).execute()
+            if policy.data:
+                p = policy.data[0]
+                db_action = p.get('action')
+                if db_action == 'block':
+                    action = 'bloqueado'
+                    policy_info['policy_id'] = p.get('id')
+                    policy_info['block_reason'] = 'database_policy'
+                    category_found = 'política'
+                elif db_action == 'allow':
+                    action = 'permitido'
+                    policy_info['policy_id'] = p.get('id')
+            # Si no hay política explícita y no estaba en prohibidos.json, se considera 'visitado'
 
         # Insertar el registro en navigation_logs
         log_data = {
@@ -899,44 +846,54 @@ def create_navigation_log():
             "url": url,
             "timestamp": timestamp,
             "action": action,
-            "policy_info": policy_info if policy_info else None # Guardar None si está vacío
+            "policy_info": policy_info if policy_info else None
         }
-        
         print(f"DEBUG: Datos de log a insertar: {log_data}")
-        
-        # Usar user_supabase en lugar de supabase para respetar RLS
         new_log = user_supabase.table('navigation_logs').insert(log_data).execute()
 
-        # --- NUEVO: Actualizar alert_stats para cualquier bloqueo ---
+        # Actualizar alert_stats si fue bloqueado
         if action == 'bloqueado' and tenant_id:
-            # Si no se encontró categoría antes, usar 'política' por defecto
             final_category = category_found or 'política'
+            print(f"DEBUG: Entrando a actualización de alert_stats para tenant {tenant_id}, categoría {final_category}")
             try:
-                print(f"DEBUG: Actualizando alert_stats para tenant {tenant_id}, categoría {final_category}")
+                print(f"DEBUG: Buscando estadística existente para tenant {tenant_id} y categoría {final_category}")
                 existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', final_category).maybe_single()
                 existing_stat_res = existing_stat_query.execute()
-                if existing_stat_res.data:
+                print(f"DEBUG: Resultado de búsqueda en alert_stats: {getattr(existing_stat_res, 'data', None)}")
+                
+                if existing_stat_res and getattr(existing_stat_res, 'data', None):
                     stat_id = existing_stat_res.data['id']
                     current_count = existing_stat_res.data['count']
-                    update_query = user_supabase.table('alert_stats').update({'count': current_count + 1, 'last_updated': datetime.utcnow().isoformat()}).eq('id', stat_id)
-                    update_query.execute()
-                    print(f"DEBUG: Estadística actualizada para tenant {tenant_id}, categoría {final_category}")
+                    print(f"DEBUG: Actualizando contador existente: stat_id={stat_id}, current_count={current_count}")
+                    update_query = user_supabase.table('alert_stats').update({
+                        'count': current_count + 1, 
+                        'last_updated': datetime.utcnow().isoformat()
+                    }).eq('id', stat_id)
+                    update_result = update_query.execute()
+                    print(f"DEBUG: Resultado de actualización: {update_result.data}")
                 else:
-                    insert_query = user_supabase.table('alert_stats').insert({'tenant_id': tenant_id, 'category': final_category, 'count': 1})
-                    insert_query.execute()
-                    print(f"DEBUG: Nueva estadística creada para tenant {tenant_id}, categoría {final_category}")
+                    print(f"DEBUG: Insertando nueva estadística para tenant {tenant_id}, categoría {final_category}")
+                    insert_query = user_supabase.table('alert_stats').insert({
+                        'tenant_id': tenant_id, 
+                        'category': final_category, 
+                        'count': 1,
+                        'last_updated': datetime.utcnow().isoformat()
+                    })
+                    insert_result = insert_query.execute()
+                    print(f"DEBUG: Resultado de inserción: {insert_result.data}")
             except Exception as stat_error:
                 print(f"DEBUG: Error actualizando estadísticas para {tenant_id}/{final_category}: {stat_error}")
-        # --- FIN NUEVO ---
+                print(f"DEBUG: Tipo de error: {type(stat_error)}")
+                import traceback
+                print(f"DEBUG: Stack trace: {traceback.format_exc()}")
 
-        # Devolver también la acción determinada para que la extensión la use
         print(f"DEBUG: Acción determinada para la navegación: {action}")
         return jsonify({"success": True, "data": new_log.data[0], "determined_action": action})
         
     except Exception as e:
         import traceback
         print(f"DEBUG: Error en create_navigation_log: {str(e)}")
-        print(traceback.format_exc()) # Imprimir traceback completo
+        print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 400
 
 @app.route('/api/navigation_logs/block', methods=['POST'])

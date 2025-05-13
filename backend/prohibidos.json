@@ -98,12 +98,6 @@
       "cryptocaperez.com",
       "profit-trade-zone.com",
       "bitcoin-ai1.com"
-    ],
-    "recomendaciones": [
-      "Utilizar APIs de navegaci\u00f3n segura (p. ej. Google Safe Browsing) para detectar sitios maliciosos en tiempo real.",
-      "Mantener la lista sincronizada con fuentes p\u00fablicas actualizadas (como Blocklist Project, PhishTank u Open Threat Exchange) que provean dominios maliciosos conocidos.",
-      "Monitorizar informes de organizaciones de seguridad (CERT, FS-ISAC, ENISA, etc.) sobre nuevos dominios peligrosos y agregarlos al listado.",
-      "Implementar actualizaciones per\u00f3dicas autom\u00e1ticas para añadir nuevos sitios bloqueados y eliminar dominios obsoletos o desactivados."
     ]
   }
   

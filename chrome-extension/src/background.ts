@@ -6,6 +6,11 @@ const API_URL = process.env.NODE_ENV === 'production'
 let policies: any[] = [];
 
 // Obtener políticas desde el backend
+enum PolicyAction {
+  Block = 'block',
+  Allow = 'allow',
+}
+
 async function fetchPolicies() {
   const { jwt_token } = await chrome.storage.local.get('jwt_token');
   if (!jwt_token) return;

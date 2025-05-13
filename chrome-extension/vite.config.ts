@@ -11,15 +11,18 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'src/popup.html'),
-        blocked: resolve(__dirname, 'src/blocked.html'),
+        blocked: resolve(__dirname, 'public/blocked.html'),
         background: resolve(__dirname, 'src/background.ts')
       },
       output: {
-        entryFileNames: '[name].js', // Solo para background.js
+        entryFileNames: '[name].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
+        format: 'es'
       }
-    }
+    },
+    target: 'esnext',
+    minify: false
   },
   // plugins: [], // Sin plugins extra por ahora
   define: {
