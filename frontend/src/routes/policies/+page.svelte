@@ -2,7 +2,7 @@
   import Navbar from '$lib/Navbar.svelte';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { auth, currentUser as currentUserStore } from '$lib/auth';
+  import { auth, type User } from '$lib/auth';
   import { API_URL } from '$lib/config';
 
   type Policy = {
@@ -14,8 +14,8 @@
     group?: { name: string } | null; 
   };
 
-  let currentUser: import('$lib/auth').User;
-  $: currentUser = $currentUserStore;
+  let currentUser: User | null = null;
+  $: currentUser = $auth.user;
 
   let activeTab = 'access';
   let filter = 'all';
@@ -150,7 +150,7 @@
 
   onMount(async () => {
     await auth.init(); 
-    if (!auth.token || !currentUser) { 
+    if (!auth.token || !currentUser) {
       goto('/login');
       return;
     }
@@ -167,7 +167,7 @@
     availableGroups = [];
     createError = '';
     // If client, their tenant is fixed. If admin, they must select a tenant first.
-    selectedTenantIdForPolicyCreation = currentUser?.role === 'client' ? currentUser.tenant_id : null;
+    selectedTenantIdForPolicyCreation = currentUser?.role === 'client' ? (currentUser.tenant_id ?? null) : null;
 
     if (currentUser?.role === 'client' && currentUser.tenant_id) {
       loadGroupsForSelectedTenant();
@@ -182,7 +182,7 @@
     policyScope = policy.group_id ? 'group' : 'tenant'; 
     availableGroups = [];
     createError = '';
-    selectedTenantIdForPolicyCreation = policy.tenant_id || (currentUser?.role === 'client' ? currentUser.tenant_id : null);
+    selectedTenantIdForPolicyCreation = policy.tenant_id || (currentUser?.role === 'client' ? (currentUser.tenant_id ?? null) : null);
     
     if (selectedTenantIdForPolicyCreation) {
         loadGroupsForSelectedTenant();

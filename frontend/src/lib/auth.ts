@@ -1,9 +1,10 @@
 import { writable, get } from 'svelte/store';
 
-interface User {
+export interface User {
   email: string;
   user_id: string;
   role: string;
+  tenant_id?: string;
 }
 
 interface AuthState {
