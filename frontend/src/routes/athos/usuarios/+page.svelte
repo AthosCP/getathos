@@ -16,6 +16,7 @@
     admin_id?: string;
   };
 
+  let activeTab = 'people';
   let showCreateModal = false;
   let editingUsuario: Usuario | null = null;
   let usuarios: Usuario[] = [];
@@ -161,93 +162,140 @@
 <div class="min-h-screen bg-gray-100">
   <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
     <div class="px-4 sm:px-0">
-      <div class="flex justify-between items-center">
-        <h1 class="text-2xl font-bold text-gray-900">Usuarios</h1>
-        <button
-          on:click={openCreateModal}
-          class="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
-        >
-          Nuevo Usuario
-        </button>
+      <h1 class="text-2xl font-semibold text-gray-900">Usuarios Protegidos</h1>
+
+      <!-- Tabs -->
+      <div class="border-b border-gray-200 mt-4">
+        <nav class="-mb-px flex space-x-8">
+          <button
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'people' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => activeTab = 'people'}
+          >
+            Personas
+          </button>
+          <button
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'groups' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => activeTab = 'groups'}
+          >
+            Grupos
+          </button>
+        </nav>
       </div>
-      <div class="mt-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label class="block text-xs font-medium text-gray-700">Buscar por email</label>
-          <input type="text" bind:value={filtroEmail} placeholder="Email" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-700">Rol</label>
-          <select bind:value={filtroRol} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-            <option value="">Todos</option>
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-700">Cliente</label>
-          <select bind:value={filtroCliente} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-            <option value="">Todos</option>
-            {#each clientes as cliente}
-              <option value={cliente.id}>{cliente.name}</option>
-            {/each}
-          </select>
+
+      <!-- Contenido principal -->
+      <div class="mt-6">
+        <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+          <div class="p-6 border-b border-gray-200">
+            <h2 class="text-lg font-semibold text-gray-900 mb-2">
+              {#if activeTab === 'people'}
+                Gestión de Usuarios
+              {:else}
+                Gestión de Grupos
+              {/if}
+            </h2>
+            <p class="text-gray-600">
+              {#if activeTab === 'people'}
+                Administra los usuarios que tienen acceso al sistema y sus permisos.
+              {:else}
+                Organiza los usuarios en grupos para facilitar la gestión de permisos.
+              {/if}
+            </p>
+          </div>
+
+          {#if activeTab === 'people'}
+            <div class="px-4 py-5 sm:p-6">
+              <div class="flex justify-between items-center mb-4">
+                <div class="flex flex-wrap gap-4 items-end">
+                  <div>
+                    <label class="block text-xs font-medium text-gray-700">Buscar por email</label>
+                    <input type="text" bind:value={filtroEmail} placeholder="Email" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-gray-700">Rol</label>
+                    <select bind:value={filtroRol} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                      <option value="">Todos</option>
+                      <option value="user">user</option>
+                      <option value="admin">admin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-gray-700">Cliente</label>
+                    <select bind:value={filtroCliente} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                      <option value="">Todos</option>
+                      {#each clientes as cliente}
+                        <option value={cliente.id}>{cliente.name}</option>
+                      {/each}
+                    </select>
+                  </div>
+                </div>
+                <button
+                  on:click={openCreateModal}
+                  class="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+                >
+                  Nuevo Usuario
+                </button>
+              </div>
+
+              {#if loading}
+                <div class="text-center py-8">
+                  <p class="text-gray-500">Cargando usuarios...</p>
+                </div>
+              {:else if error}
+                <div class="text-center py-8 text-red-500">
+                  <p>{error}</p>
+                </div>
+              {:else}
+                <div class="overflow-x-auto">
+                  <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Email</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Rol</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Cliente</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 bg-white">
+                      {#each usuarios as usuario}
+                        <tr>
+                          <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
+                            {usuario.email}
+                          </td>
+                          <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                            {usuario.role}
+                          </td>
+                          <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                            {getClienteName(usuario.tenant_id)}
+                          </td>
+                          <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                            <button
+                              on:click={() => openEditModal(usuario)}
+                              class="text-indigo-600 hover:text-indigo-900 mr-4"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              on:click={() => deleteUsuario(usuario)}
+                              class="text-red-600 hover:text-red-900"
+                            >
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="p-6 text-center text-gray-500">
+              <p>Esta funcionalidad estará disponible próximamente.</p>
+            </div>
+          {/if}
         </div>
       </div>
     </div>
-
-    {#if loading}
-      <div class="text-center mt-8">Cargando...</div>
-    {:else if error}
-      <div class="text-red-500 text-center mt-8">{error}</div>
-    {:else}
-      <div class="mt-8 flex flex-col">
-        <div class="-my-2 -mx-4 overflow-x-auto sm:-mx-6 lg:-mx-8">
-          <div class="inline-block min-w-full py-2 align-middle md:px-6 lg:px-8">
-            <div class="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-              <table class="min-w-full divide-y divide-gray-300">
-                <thead class="bg-gray-50">
-                  <tr>
-                    <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Email</th>
-                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Rol</th>
-                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Cliente</th>
-                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200 bg-white">
-                  {#each usuarios as usuario}
-                    <tr>
-                      <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
-                        {usuario.email}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                        {usuario.role}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                        {getClienteName(usuario.tenant_id)}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                        <button
-                          on:click={() => openEditModal(usuario)}
-                          class="text-indigo-600 hover:text-indigo-900 mr-4"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          on:click={() => deleteUsuario(usuario)}
-                          class="text-red-600 hover:text-red-900"
-                        >
-                          Eliminar
-                        </button>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    {/if}
   </main>
 </div>
 

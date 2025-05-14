@@ -50,6 +50,25 @@ function renderProtected() {
     </div>
   `;
   document.getElementById('athos-logout')!.onclick = async () => {
+    // Obtener la pestaña actual antes de hacer logout
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentTab = tabs[0];
+    
+    // Enviar mensaje al background para registrar el logout
+    if (currentTab?.url) {
+      chrome.runtime.sendMessage({
+        type: 'user_logout',
+        data: {
+          url: currentTab.url,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+    
+    // Esperar un momento para que se registre el evento
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Hacer logout
     await chrome.storage.local.remove('jwt_token');
     renderLogin();
   };

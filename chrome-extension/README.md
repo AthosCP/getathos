@@ -1,4 +1,159 @@
-# Athos Web Control - Extensión Chrome
+# Athos Chrome Extension
+
+Extensión de Chrome para el control y monitoreo de navegación web en organizaciones.
+
+## Datos Capturados
+
+### 1. Navegación
+- URL visitada
+- Dominio
+- Título de la pestaña
+- Tiempo en página (actualizado cada 5 minutos)
+- Número de pestañas abiertas
+- Estado de foco de la pestaña
+- IP del usuario
+- User Agent
+
+### 2. Interacciones del Usuario
+- **Clicks**
+  - Elemento clickeado (tag, id, clase)
+  - Texto del elemento
+  - URL de origen
+  - Timestamp
+
+- **Copiar/Pegar**
+  - Texto seleccionado/copiado
+  - Elemento destino
+  - URL de origen
+  - Timestamp
+
+- **Descargas**
+  - Nombre del archivo
+  - Tamaño
+  - Tipo MIME
+  - URL de origen
+  - Timestamp
+
+- **Carga de Archivos**
+  - Nombre del archivo
+  - Elemento de carga
+  - URL de origen
+  - Timestamp
+
+### 3. Sesión
+- **Login**
+  - Email del usuario
+  - Timestamp
+  - IP
+  - User Agent
+
+- **Logout**
+  - Tipo (voluntario/forzado)
+  - URL de origen
+  - Timestamp
+  - Tiempo total de sesión
+
+## Estructura de Datos
+
+### Navigation Logs
+```typescript
+interface NavigationEvent {
+  domain: string;
+  url: string;
+  action: string;
+  timestamp: string;
+  ip_address?: string;
+  user_agent: string;
+  tab_title: string;
+  time_on_page: number;
+  open_tabs_count: number;
+  tab_focused: boolean;
+  event_type: 'navegacion' | 'formulario' | 'descarga' | 'bloqueo';
+  event_details: Record<string, any>;
+  risk_score: number;
+}
+```
+
+### User Interactions
+```typescript
+interface UserInteractionEvent {
+  tipo_evento: 'click' | 'copy' | 'paste' | 'download' | 'file_upload';
+  elemento_target: {
+    tag: string;
+    id?: string;
+    class?: string;
+    text?: string;
+  };
+  nombre_archivo?: string;
+  timestamp: string;
+  url_origen: string;
+}
+```
+
+## Componentes
+
+### Content Script (`content.ts`)
+- Captura eventos del usuario en la página
+- Envía mensajes al background script
+- No tiene acceso directo al backend
+- Eventos capturados:
+  - Clicks
+  - Copiar/Pegar
+  - Descargas
+  - Carga de archivos
+
+### Background Script (`background.ts`)
+- Maneja la lógica principal
+- Comunica con el backend
+- Gestiona políticas y bloqueos
+- Registra eventos
+- Funcionalidades:
+  - Control de navegación
+  - Cálculo de riesgo
+  - Gestión de timers
+  - Registro de eventos
+
+### Popup (`popup.ts`)
+- Interfaz de usuario
+- Login/Logout
+- Estado de protección
+- Funcionalidades:
+  - Autenticación
+  - Estado de sesión
+  - Cierre de sesión
+
+## Permisos
+- `storage`: Token y políticas
+- `tabs`: Monitoreo de navegación
+- `webNavigation`: Cambios de URL
+- `webRequest`: Interceptación de peticiones
+- `downloads`: Monitoreo de descargas
+- `notifications`: Alertas de bloqueo
+
+## Desarrollo
+
+### Requisitos
+- Node.js
+- TypeScript
+- Chrome Extension Manifest V3
+
+### Build
+```bash
+npm install
+npm run build
+```
+
+### Testing
+1. Cargar la extensión en Chrome
+2. Iniciar sesión con credenciales válidas
+3. Navegar y verificar logs en el backend
+
+## Próximas Mejoras
+1. Dashboard de actividad
+2. Alertas en tiempo real
+3. Políticas más granulares
+4. Análisis de comportamiento
+5. Exportación de logs
 
 ## Estructura del proyecto
 

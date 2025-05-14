@@ -508,22 +508,27 @@ def get_policies():
     role = claims.get('role')
     tenant_id = claims.get('tenant_id')
     action = request.args.get('action')
+    group_id_filter = request.args.get('group_id') # Nuevo filtro
     
-    # Agregar logs para depuración
     print(f"GET /api/policies - JWT claims: {claims}")
-    print(f"Role: {role}, Tenant ID: {tenant_id}")
+    print(f"Role: {role}, Tenant ID: {tenant_id}, Group ID Filter: {group_id_filter}")
     
     jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    
-    # Crear cliente Supabase con JWT para que respete RLS
     user_supabase = get_supabase_with_jwt(jwt_token)
     
-    query = user_supabase.table('policies').select('*')
+    query = user_supabase.table('policies').select('*, groups(name)') # Incluir nombre del grupo si existe
     
     if role == 'admin':
         print("Usuario es admin, puede ver todas las políticas")
-        pass
-    elif role in ['client', 'user']:  # Permitir también a usuarios regulares
+        # Si admin filtra por un tenant_id específico desde el frontend
+        admin_tenant_filter = request.args.get('tenant_id')
+        if admin_tenant_filter:
+            try:
+                UUID(admin_tenant_filter, version=4)
+                query = query.eq('tenant_id', admin_tenant_filter)
+            except ValueError:
+                return jsonify({"error": "Formato de tenant_id inválido para el filtro de admin."}), 400
+    elif role in ['client', 'user']:
         print(f"Usuario es {role}, filtrando por tenant_id: {tenant_id}")
         query = query.eq('tenant_id', tenant_id)
     else:
@@ -532,14 +537,35 @@ def get_policies():
         
     if action:
         query = query.eq('action', action)
-        
+    
+    if group_id_filter: # Aplicar filtro de group_id
+        try:
+            UUID(group_id_filter, version=4)
+            query = query.eq('group_id', group_id_filter)
+        except ValueError:
+            return jsonify({"error": "Formato de group_id inválido para el filtro."}), 400
+            
     try:
-        policies = query.execute()
-        print(f"Políticas encontradas: {len(policies.data)}")
-        return jsonify({"success": True, "data": policies.data})
+        policies = query.order('created_at', desc=True).execute()
+        
+        # Procesar para renombrar groups a group y limpiar si no hay grupo
+        processed_policies = []
+        for policy_data in policies.data:
+            if policy_data.get('groups') is not None: # 'groups' es el nombre de la relación que Supabase usa
+                policy_data['group'] = policy_data.pop('groups')
+                if policy_data['group'] is None: # Si la FK group_id es NULL, 'groups' podría ser None
+                    del policy_data['group']
+            elif 'groups' in policy_data: # Asegurarse de eliminar 'groups' si es explícitamente None
+                 del policy_data['groups']
+            processed_policies.append(policy_data)
+
+        print(f"Políticas encontradas: {len(processed_policies)}")
+        return jsonify({"success": True, "data": processed_policies})
     except Exception as e:
         error_msg = str(e)
         print(f"Error al obtener políticas: {error_msg}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": error_msg}), 500
 
 @app.route('/api/policies', methods=['POST'])
@@ -548,126 +574,262 @@ def create_policy():
     try:
         claims = get_jwt()
         role = claims.get('role')
-        tenant_id = claims.get('tenant_id')
+        requesting_tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
         data = request.get_json()
         
         print("Intentando crear política con datos:", data)
         print("Claims JWT:", claims)
         
+        policy_tenant_id = None
+        group_id = data.get('group_id')
+
         if role == 'client':
-            data['tenant_id'] = tenant_id
+            if not requesting_tenant_id:
+                 return jsonify({"error": "Cliente debe tener un tenant_id asociado"}), 403
+            policy_tenant_id = requesting_tenant_id
+            # Si un cliente especifica un group_id, este debe pertenecer a su tenant_id
+            if group_id:
+                jwt_token_client = request.headers.get('Authorization', '').replace('Bearer ', '')
+                client_supabase = get_supabase_with_jwt(jwt_token_client)
+                group_check = client_supabase.table('groups').select('id, tenant_id').eq('id', group_id).eq('tenant_id', policy_tenant_id).maybe_single().execute()
+                if not group_check.data:
+                    return jsonify({"error": "Grupo no encontrado o no pertenece al tenant del cliente"}), 400
         elif role == 'admin':
-            if not data.get('tenant_id'):
-                return jsonify({"error": "Falta tenant_id"}), 400
+            policy_tenant_id = data.get('tenant_id') # Admin puede especificar el tenant_id
+            if group_id:
+                if not policy_tenant_id: # Si hay group_id, se necesita un tenant_id para validar el grupo
+                    return jsonify({"error": "Para asignar a un grupo, un admin debe especificar el tenant_id del grupo"}), 400
+                jwt_token_admin = request.headers.get('Authorization', '').replace('Bearer ', '')
+                admin_supabase = get_supabase_with_jwt(jwt_token_admin)
+                group_check = admin_supabase.table('groups').select('id, tenant_id').eq('id', group_id).eq('tenant_id', policy_tenant_id).maybe_single().execute()
+                if not group_check.data:
+                    return jsonify({"error": "Grupo no encontrado o no pertenece al tenant_id especificado"}), 400
+            elif not policy_tenant_id: # Si no es política de grupo, y admin no especifica tenant, es error
+                 return jsonify({"error": "Admin debe especificar tenant_id si la política no es para un grupo específico (o si el grupo es global, no implementado)"}), 400
         else:
-            return jsonify({"error": "No autorizado"}), 403
+            return jsonify({"error": "No autorizado para crear políticas"}), 403
             
+        if not policy_tenant_id and not group_id: # Sanity check, aunque la lógica anterior debería cubrirlo
+             return jsonify({"error": "La política debe estar asociada a un tenant o a un grupo (que a su vez tiene un tenant)"}), 400
+
         # Validar acción
         if data.get('action') not in ['allow', 'block']:
             return jsonify({"error": "Acción inválida"}), 400
+        if not data.get('domain'):
+            return jsonify({"error": "Dominio requerido"}), 400
             
         # Obtener el token JWT para pasar a Supabase
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token)
+        user_supabase = get_supabase_with_jwt(jwt_token) # Usar el user_supabase del que hace la request para la inserción
             
-        print("Datos a insertar en policies:", {
-            'tenant_id': data['tenant_id'],
+        insert_data = {
             'domain': data['domain'],
-            'action': data['action']
-        })
-        print("Tipo de tenant_id:", type(data['tenant_id']))
-            
-        # Insertar política usando el cliente con JWT
-        new_policy = user_supabase.table('policies').insert({
-            'tenant_id': data['tenant_id'],
-            'domain': data['domain'],
-            'action': data['action']
-        }).execute()
+            'action': data['action'],
+            'tenant_id': policy_tenant_id # Siempre guardamos el tenant_id
+        }
+        if group_id:
+            insert_data['group_id'] = group_id
+            # El tenant_id de la política debe ser el del grupo. Ya validado.
         
-        return jsonify({"success": True, "data": new_policy.data[0]})
+        print("Datos a insertar en policies:", insert_data)
+            
+        new_policy_res = user_supabase.table('policies').insert(insert_data).execute()
+
+        if not new_policy_res.data or (hasattr(new_policy_res, 'error') and new_policy_res.error):
+            error_detail = new_policy_res.error.message if hasattr(new_policy_res, 'error') and new_policy_res.error else "No data returned"
+            print(f"Error al crear política en Supabase: {error_detail}")
+            return jsonify({"success": False, "error": f"No se pudo crear la política: {error_detail}"}), 500
+        
+        return jsonify({"success": True, "data": new_policy_res.data[0]}), 201
     except Exception as e:
         print(f"Error en create_policy: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 400
 
-@app.route('/api/policies/<policy_id>', methods=['PUT'])
+@app.route('/api/policies/<policy_id_str>', methods=['PUT']) # Usar policy_id_str
 @jwt_required()
-def update_policy(policy_id):
+def update_policy(policy_id_str): # Usar policy_id_str
     try:
         claims = get_jwt()
         role = claims.get('role')
-        tenant_id = claims.get('tenant_id')
+        requesting_tenant_id = claims.get('tenant_id')
         
+        try:
+            policy_id = UUID(policy_id_str, version=4)
+        except ValueError:
+            return jsonify({"success": False, "error": "Formato de policy_id inválido."}), 400
+
         data = request.get_json()
+        print(f"Intentando actualizar política {policy_id} con datos: {data}")
         
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token) # Usar el user_supabase del que hace la request
+
+        # Verificar que la política existe y obtener su tenant_id y group_id actual
+        current_policy_res = user_supabase.table('policies').select('id, tenant_id, group_id').eq('id', policy_id).maybe_single().execute()
+        if not current_policy_res.data:
+            return jsonify({"error": "Política no encontrada"}), 404
+        
+        current_policy = current_policy_res.data
+        current_policy_tenant_id = current_policy.get('tenant_id')
+
         # Verificar permisos
         if role == 'client':
-            # Verificar que la política pertenece al tenant
-            policy = supabase.table('policies').select('*').eq('id', policy_id).eq('tenant_id', tenant_id).execute()
-            if not policy.data:
-                return jsonify({"error": "No autorizado"}), 403
-        elif role != 'admin':
-            return jsonify({"error": "No autorizado"}), 403
-            
-        # Validar acción
-        if data.get('action') not in ['allow', 'block']:
-            return jsonify({"error": "Acción inválida"}), 400
-            
-        # Actualizar política
-        updated_policy = supabase.table('policies').update({
-            'domain': data['domain'],
-            'action': data['action']
-        }).eq('id', policy_id).execute()
+            if not requesting_tenant_id or str(current_policy_tenant_id) != str(requesting_tenant_id):
+                return jsonify({"error": "No autorizado para modificar esta política (cliente)"}), 403
+        elif role == 'admin':
+            # Admin puede modificar, pero si cambia tenant_id o group_id, las validaciones se aplican más abajo
+            pass
+        else: # Otros roles
+            return jsonify({"error": "No autorizado para modificar políticas"}), 403
         
-        return jsonify({"success": True, "data": updated_policy.data[0]})
+        update_payload = {}
+        if 'domain' in data and data['domain'] is not None:
+            update_payload['domain'] = data['domain']
+        if 'action' in data and data['action'] is not None:
+            if data['action'] not in ['allow', 'block']:
+                return jsonify({"error": "Acción inválida"}), 400
+            update_payload['action'] = data['action']
+
+        new_group_id = data.get('group_id') # Puede ser un UUID string, o None/null para desasociar
+        new_tenant_id_str = data.get('tenant_id') # Admin podría querer cambiar el tenant_id
+        
+        # Lógica para manejar cambio de tenant_id y group_id
+        # El tenant_id final de la política.
+        final_policy_tenant_id_str = current_policy_tenant_id # Por defecto el actual
+
+        if role == 'admin' and new_tenant_id_str is not None and new_tenant_id_str != str(current_policy_tenant_id):
+            # Admin está intentando cambiar el tenant_id de la política directamente
+            try:
+                UUID(new_tenant_id_str, version=4)
+                # Validar que el nuevo tenant existe (opcional, pero buena práctica)
+                # tenant_check = user_supabase.table('tenants').select('id').eq('id', new_tenant_id_str).maybe_single().execute()
+                # if not tenant_check.data:
+                #     return jsonify({"error": f"El nuevo tenant_id {new_tenant_id_str} no existe."}), 400
+                final_policy_tenant_id_str = new_tenant_id_str
+                update_payload['tenant_id'] = final_policy_tenant_id_str
+            except ValueError:
+                 return jsonify({"error": "Formato de nuevo tenant_id inválido."}), 400
+        
+        if new_group_id is not None: # Intentando asociar o cambiar grupo
+            if not final_policy_tenant_id_str: # Necesitamos un tenant para el grupo
+                 return jsonify({"error": "Se requiere un tenant_id para asociar la política a un grupo."}),400
+            try:
+                parsed_new_group_id = UUID(new_group_id, version=4)
+                group_check = user_supabase.table('groups').select('id, tenant_id').eq('id', parsed_new_group_id).eq('tenant_id', final_policy_tenant_id_str).maybe_single().execute()
+                if not group_check.data:
+                    return jsonify({"error": f"Nuevo grupo {new_group_id} no encontrado o no pertenece al tenant {final_policy_tenant_id_str}"}), 400
+                update_payload['group_id'] = str(parsed_new_group_id)
+                # La política tomará el tenant_id del grupo si se está asignando a un grupo.
+                # O si un admin cambia el tenant_id y el group_id, la validación anterior lo cubre.
+                update_payload['tenant_id'] = str(group_check.data['tenant_id']) # Asegurar consistencia
+            except ValueError:
+                return jsonify({"error": "Formato de nuevo group_id inválido."}), 400
+        elif 'group_id' in data and data['group_id'] is None: # Intentando desasociar de grupo
+            update_payload['group_id'] = None
+            # Si se desasocia de grupo, el tenant_id de la política debe ser explícito.
+            # Si el admin no proveyó un tenant_id nuevo, se mantiene el original de la política (o el del client).
+            # Si el admin proveyó un tenant_id, ya está en final_policy_tenant_id_str.
+            if not final_policy_tenant_id_str and role == 'admin': # Client siempre tiene tenant_id
+                 return jsonify({"error": "Admin debe especificar un tenant_id si se desasocia la política de un grupo y no tenía uno antes."}), 400
+            update_payload['tenant_id'] = final_policy_tenant_id_str
+
+
+        if not update_payload: # No hay nada que actualizar
+            # Devolver la política actual o un mensaje.
+            # Para consistencia, podríamos devolver la política actual si la buscamos con el join de grupo.
+            # O simplemente un 200 con la política (sin join).
+            current_policy_full_res = user_supabase.table('policies').select('*, groups(name)').eq('id', policy_id).maybe_single().execute()
+            if current_policy_full_res.data:
+                 processed_policy = current_policy_full_res.data
+                 if processed_policy.get('groups') is not None:
+                    processed_policy['group'] = processed_policy.pop('groups')
+                    if processed_policy['group'] is None: del processed_policy['group']
+                 elif 'groups' in processed_policy: del processed_policy['groups']
+                 return jsonify({"success": True, "data": processed_policy, "message": "No changes detected"}), 200
+            else: # No debería pasar si el check inicial pasó
+                 return jsonify({"error": "Política no encontrada al final del proceso."}), 404
+
+
+        print("Payload de actualización para policies:", update_payload)
+        updated_policy_res = user_supabase.table('policies').update(update_payload).eq('id', policy_id).select('*, groups(name)').maybe_single().execute()
+        
+        if not updated_policy_res.data or (hasattr(updated_policy_res, 'error') and updated_policy_res.error):
+            error_detail = updated_policy_res.error.message if hasattr(updated_policy_res, 'error') and updated_policy_res.error else "No data returned"
+            print(f"Error al actualizar política en Supabase: {error_detail}")
+            return jsonify({"success": False, "error": f"No se pudo actualizar la política: {error_detail}"}), 500
+
+        processed_updated_policy = updated_policy_res.data
+        if processed_updated_policy.get('groups') is not None:
+            processed_updated_policy['group'] = processed_updated_policy.pop('groups')
+            if processed_updated_policy['group'] is None: del processed_updated_policy['group']
+        elif 'groups' in processed_updated_policy: del processed_updated_policy['groups']
+
+        return jsonify({"success": True, "data": processed_updated_policy})
     except Exception as e:
         print(f"Error en update_policy: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 400
 
-@app.route('/api/policies/<policy_id>', methods=['DELETE'])
+@app.route('/api/policies/<policy_id_str>', methods=['DELETE']) # Usar policy_id_str
 @jwt_required()
-def delete_policy(policy_id):
+def delete_policy(policy_id_str): # Usar policy_id_str
     try:
-        # Obtener claims del JWT
         claims = get_jwt()
         role = claims.get('role')
-        tenant_id = claims.get('tenant_id')
+        requesting_tenant_id = claims.get('tenant_id')
         
-        # Logs para depuración
+        try:
+            policy_id = UUID(policy_id_str, version=4)
+        except ValueError:
+            return jsonify({"success": False, "error": "Formato de policy_id inválido."}), 400
+
         print(f"DELETE /api/policies/{policy_id} - JWT claims: {claims}")
-        print(f"Role: {role}, Tenant ID: {tenant_id}")
+        print(f"Role: {role}, Tenant ID: {requesting_tenant_id}")
         
-        # Usar el token para crear un cliente Supabase con JWT
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
         
-        # Obtener política usando el cliente con JWT
-        policy = user_supabase.table('policies').select('*').eq('id', policy_id).execute()
+        policy_res = user_supabase.table('policies').select('id, tenant_id').eq('id', policy_id).maybe_single().execute()
         
-        if not policy.data:
+        if not policy_res.data:
             return jsonify({"error": "Política no encontrada"}), 404
             
-        target_policy = policy.data[0]
+        target_policy = policy_res.data
+        target_policy_tenant_id = target_policy.get('tenant_id')
         
-        # Verificar permisos basados en rol
         if role == 'admin':
-            print("Usuario es admin, puede eliminar cualquier política")
-            pass
+            print("Usuario es admin, puede eliminar cualquier política (RLS dependiente)")
+            pass # RLS se encargará de si puede o no eliminar.
         elif role == 'client':
-            print(f"Usuario es client, verificando tenant_id: {tenant_id} vs política: {target_policy.get('tenant_id')}")
-            if target_policy.get('tenant_id') != tenant_id:
-                return jsonify({"error": "No autorizado"}), 403
-        else:
+            print(f"Usuario es client, verificando tenant_id: {requesting_tenant_id} vs política: {target_policy_tenant_id}")
+            if not requesting_tenant_id or str(target_policy_tenant_id) != str(requesting_tenant_id):
+                return jsonify({"error": "No autorizado para eliminar esta política"}), 403
+        else: # Otros roles
             print(f"Rol no autorizado: {role}")
-            return jsonify({"error": "No autorizado"}), 403
+            return jsonify({"error": "No autorizado para eliminar políticas"}), 403
             
-        # Eliminar política usando el cliente con JWT
-        deleted = user_supabase.table('policies').delete().eq('id', policy_id).execute()
-        print(f"Política eliminada: {policy_id}")
+        deleted_res = user_supabase.table('policies').delete().eq('id', policy_id).execute()
+
+        # Supabase delete no devuelve error si no se borra nada por RLS, pero `deleted_res.data` estará vacío.
+        # O si la RLS lo impide, puede lanzar un error que es capturado por el try-except general.
+        if hasattr(deleted_res, 'error') and deleted_res.error:
+            print(f"Error al eliminar política en Supabase: {deleted_res.error.message}")
+            return jsonify({"success": False, "error": f"Error al eliminar política: {deleted_res.error.message}"}), 500
         
-        return jsonify({"success": True, "message": "Política eliminada"})
+        # Podríamos chequear deleted_res.data para ver si algo fue realmente borrado,
+        # pero si la RLS previene, el error debería ser capturado.
+        # Si el ID no existe, el `policy_res` anterior ya lo hubiera detectado.
+
+        print(f"Política eliminada o intento de eliminación para: {policy_id}")
+        return jsonify({"success": True, "message": "Política eliminada correctamente"})
     except Exception as e:
         error_msg = str(e)
         print(f"Error en delete_policy: {error_msg}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": error_msg}), 400
 
 # --- ENDPOINTS DE HISTORIAL DE NAVEGACIÓN ---
@@ -761,20 +923,6 @@ def get_navigation_logs():
         print(f"Error en get_navigation_logs: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 400
 
-# Cargar la lista de sitios prohibidos al iniciar
-prohibited_sites = {}
-try:
-    # Usar una ruta absoluta o relativa adecuada
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, 'prohibidos.json')
-    with open(file_path, 'r', encoding='utf-8') as f: # Especificar encoding
-        prohibited_sites = json.load(f)
-    print("Lista de sitios prohibidos cargada exitosamente.")
-except FileNotFoundError:
-    print(f"Advertencia: archivo prohibidos.json no encontrado en {file_path}. La verificación de categorías no funcionará.")
-except json.JSONDecodeError:
-    print("Error: El archivo prohibidos.json no es un JSON válido.")
-
 @app.route('/api/navigation_logs', methods=['POST'])
 @jwt_required()
 def create_navigation_log():
@@ -793,6 +941,21 @@ def create_navigation_log():
         domain = data.get('domain')
         url = data.get('url')
         timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
+        ip_address = data.get('ip_address')
+        
+        # Enriquecer con ciudad y país usando ipinfo.io
+        city = None
+        country = None
+        if ip_address:
+            try:
+                ipinfo_url = f'https://ipinfo.io/{ip_address}/json'
+                ipinfo_res = requests.get(ipinfo_url, timeout=2)
+                if ipinfo_res.status_code == 200:
+                    ipinfo_data = ipinfo_res.json()
+                    city = ipinfo_data.get('city')
+                    country = ipinfo_data.get('country')
+            except Exception as e:
+                print(f"Error consultando ipinfo.io: {e}")
         
         print(f"DEBUG: Recibido para navegación - domain: {domain}, url: {url}")
         
@@ -806,39 +969,122 @@ def create_navigation_log():
 
         print('DEBUG: Chequeando lista prohibida...')
         # PASO 1: Verificar en la lista local de sitios prohibidos
-        for category, domains in prohibited_sites.items():
-            if category == 'recomendaciones':
-                continue
-            normalized_list = [d.replace('www.', '') for d in domains]
-            if normalized_domain in normalized_list:
-                action = 'bloqueado'
-                category_found = category
-                print(f"DEBUG: Dominio '{domain}' (normalizado: {normalized_domain}) encontrado en categoría prohibida: '{category_found}'")
-                policy_info['block_reason'] = 'prohibited_list'
-                policy_info['category'] = category_found
-                break
+        global prohibited_sites # Acceder a la variable global
+        # Asegurar que prohibited_sites esté cargado. Esto podría hacerse una vez al inicio de la app de forma más eficiente.
+        # Pero para asegurar que siempre esté disponible incluso en desarrollo con recarga, lo verificamos aquí.
+        if not prohibited_sites or not isinstance(prohibited_sites, dict):
+            print("DEBUG: `prohibited_sites` no está cargado o no es un dict. Intentando cargar...")
+            loaded_sites = {}
+            try:
+                script_dir_local = os.path.dirname(os.path.abspath(__file__))
+                file_path_local = os.path.join(script_dir_local, 'prohibidos.json')
+                with open(file_path_local, 'r', encoding='utf-8') as f_local:
+                    loaded_sites = json.load(f_local)
+                prohibited_sites = loaded_sites # Asignar a la variable global
+                print("Lista de sitios prohibidos cargada/recargada dinámicamente en create_navigation_log.")
+            except FileNotFoundError:
+                prohibited_sites = {} # Asegurar que sea un dict vacío si no se encuentra
+                print(f"Advertencia: prohibidos.json no encontrado en create_navigation_log. La verificación de categorías no funcionará.")
+            except json.JSONDecodeError:
+                prohibited_sites = {} # Asegurar que sea un dict vacío si hay error de JSON
+                print("Error: El archivo prohibidos.json no es un JSON válido (carga dinámica).")
+            except Exception as e_load:
+                prohibited_sites = {} # Fallback genérico
+                print(f"Error inesperado al cargar prohibidos.json: {e_load}")
+
+        if isinstance(prohibited_sites, dict):
+            for category, domains_list in prohibited_sites.items(): 
+                if category == 'recomendaciones':
+                    continue
+                if isinstance(domains_list, list): # Asegurarse que domains_list es una lista
+                    normalized_list = [str(d).replace('www.', '') for d in domains_list]
+                    if normalized_domain in normalized_list:
+                        action = 'bloqueado'
+                        category_found = category
+                        print(f"DEBUG: Dominio '{domain}' (normalizado: {normalized_domain}) encontrado en categoría prohibida: '{category_found}'")
+                        policy_info['block_reason'] = 'prohibited_list'
+                        policy_info['category'] = category_found
+                        break
+                else:
+                    print(f"DEBUG: Se esperaba una lista de dominios para la categoría '{category}', pero se encontró {type(domains_list)}")
+        else:
+            print("DEBUG: `prohibited_sites` no es un diccionario, se omite el chequeo de lista prohibida.")
+
 
         print('DEBUG: Chequeando políticas de la base de datos...')
         # PASO 2: Si no fue bloqueado por la lista prohibida, verificar políticas de la BD
         if action != 'bloqueado':
-            policy_query = user_supabase.table('policies').select('*').eq('domain', domain)
-            if tenant_id:
-                policy_query = policy_query.eq('tenant_id', tenant_id)
-            policy = policy_query.order('created_at', desc=True).execute()
-            if policy.data:
-                p = policy.data[0]
-                db_action = p.get('action')
+            user_group_ids = []
+            if user_id: 
+                group_membership_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
+                if group_membership_res.data:
+                    user_group_ids = [str(gm['group_id']) for gm in group_membership_res.data]
+            
+            print(f"DEBUG: Usuario {user_id} pertenece a los grupos: {user_group_ids}")
+
+            potential_policies = []
+            
+            if user_group_ids:
+                group_policies_res = (user_supabase.table('policies')
+                    .select('id, action, domain, group_id, tenant_id')
+                    .eq('domain', domain)
+                    .in_('group_id', user_group_ids)
+                    .execute())
+                if group_policies_res.data:
+                    potential_policies.extend(group_policies_res.data)
+            
+            if tenant_id: 
+                tenant_policies_res = (user_supabase.table('policies')
+                    .select('id, action, domain, group_id, tenant_id')
+                    .eq('domain', domain)
+                    .eq('tenant_id', tenant_id)
+                    .is_('group_id', None)
+                    .is_('user_id', None) 
+                    .execute())
+                if tenant_policies_res.data:
+                    potential_policies.extend(tenant_policies_res.data)
+            
+            print(f"DEBUG: Políticas potenciales encontradas para el dominio '{domain}': {len(potential_policies)}")
+
+            final_policy_to_apply = None
+
+            group_block_policy = next((p for p in potential_policies if p.get('group_id') and p.get('action') == 'block'), None)
+            if group_block_policy:
+                final_policy_to_apply = group_block_policy
+                print(f"DEBUG: Aplicando política de GRUPO BLOCK: {final_policy_to_apply}")
+            
+            if not final_policy_to_apply:
+                group_allow_policy = next((p for p in potential_policies if p.get('group_id') and p.get('action') == 'allow'), None)
+                if group_allow_policy:
+                    final_policy_to_apply = group_allow_policy
+                    print(f"DEBUG: Aplicando política de GRUPO ALLOW: {final_policy_to_apply}")
+
+            if not final_policy_to_apply:
+                tenant_block_policy = next((p for p in potential_policies if not p.get('group_id') and p.get('action') == 'block'), None)
+                if tenant_block_policy:
+                    final_policy_to_apply = tenant_block_policy
+                    print(f"DEBUG: Aplicando política de TENANT BLOCK: {final_policy_to_apply}")
+
+            if not final_policy_to_apply:
+                tenant_allow_policy = next((p for p in potential_policies if not p.get('group_id') and p.get('action') == 'allow'), None)
+                if tenant_allow_policy:
+                    final_policy_to_apply = tenant_allow_policy
+                    print(f"DEBUG: Aplicando política de TENANT ALLOW: {final_policy_to_apply}")
+            
+            if final_policy_to_apply:
+                db_action = final_policy_to_apply.get('action')
                 if db_action == 'block':
                     action = 'bloqueado'
-                    policy_info['policy_id'] = p.get('id')
+                    policy_info['policy_id'] = final_policy_to_apply.get('id')
                     policy_info['block_reason'] = 'database_policy'
-                    category_found = 'política'
+                    policy_info['applied_policy_type'] = 'group' if final_policy_to_apply.get('group_id') else 'tenant'
+                    category_found = 'política' 
                 elif db_action == 'allow':
                     action = 'permitido'
-                    policy_info['policy_id'] = p.get('id')
-            # Si no hay política explícita y no estaba en prohibidos.json, se considera 'visitado'
+                    policy_info['policy_id'] = final_policy_to_apply.get('id')
+                    policy_info['applied_policy_type'] = 'group' if final_policy_to_apply.get('group_id') else 'tenant'
 
-        # Insertar el registro en navigation_logs
+        # Insertar el registro en navigation_logs con todos los campos
         log_data = {
             "user_id": user_id,
             "tenant_id": tenant_id,
@@ -846,7 +1092,18 @@ def create_navigation_log():
             "url": url,
             "timestamp": timestamp,
             "action": action,
-            "policy_info": policy_info if policy_info else None
+            "policy_info": policy_info if policy_info else None,
+            "ip_address": ip_address,
+            "user_agent": data.get('user_agent'),
+            "tab_title": data.get('tab_title'),
+            "time_on_page": data.get('time_on_page'),
+            "open_tabs_count": data.get('open_tabs_count'),
+            "tab_focused": data.get('tab_focused'),
+            "event_type": data.get('event_type'),
+            "event_details": data.get('event_details'),
+            "risk_score": data.get('risk_score'),
+            "city": city,
+            "country": country
         }
         print(f"DEBUG: Datos de log a insertar: {log_data}")
         new_log = user_supabase.table('navigation_logs').insert(log_data).execute()
@@ -1440,6 +1697,1074 @@ def get_prohibidos():
     except Exception as e:
         print(f"Error al leer prohibidos.json: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/navigation_logs/riesgo', methods=['GET'])
+@jwt_required()
+def get_risk_logs():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Filtros
+        user_id = request.args.get('user_id')
+        category = request.args.get('category')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+
+        # Construir la consulta base
+        base_query = user_supabase.table('navigation_logs').select('*')
+        
+        # Aplicar filtros de permisos
+        if role == 'admin':
+            pass
+        elif role == 'client':
+            base_query = base_query.eq('tenant_id', tenant_id)
+        else:
+            return jsonify({"error": "No autorizado"}), 403
+
+        # Aplicar filtros adicionales
+        if user_id:
+            base_query = base_query.eq('user_id', user_id)
+        if category:
+            base_query = base_query.eq('policy_info->category', category)
+        if date_from:
+            base_query = base_query.gte('timestamp', date_from)
+        if date_to:
+            base_query = base_query.lte('timestamp', date_to)
+
+        # Total de registros filtrados
+        count_query = user_supabase.table('navigation_logs').select('id', count='exact')
+        if role == 'client':
+            count_query = count_query.eq('tenant_id', tenant_id)
+        if user_id:
+            count_query = count_query.eq('user_id', user_id)
+        if category:
+            count_query = count_query.eq('policy_info->category', category)
+        if date_from:
+            count_query = count_query.gte('timestamp', date_from)
+        if date_to:
+            count_query = count_query.lte('timestamp', date_to)
+        count_result = count_query.execute()
+        total = count_result.count if hasattr(count_result, 'count') else len(count_result.data)
+
+        # Paginación y datos
+        from_idx = (page - 1) * page_size
+        to_idx = from_idx + page_size - 1
+        data_query = base_query.order('risk_score', desc=True).order('timestamp', desc=True).range(from_idx, to_idx)
+        logs = data_query.execute()
+
+        # Calcular riesgo para registros que no lo tengan
+        for log in logs.data:
+            if log.get('risk_score') is None:
+                score = 0
+                event_details = log.get('event_details', {})  # Inicializar siempre
+                # Calcular riesgo basado en el tipo de evento
+                event_type = log.get('event_type', 'navegacion')
+                if event_type == 'formulario':
+                    score += 20
+                elif event_type == 'descarga':
+                    score += 30
+                elif event_type == 'bloqueo':
+                    score += 50
+                elif event_type == 'navegacion':
+                    # Verificar si es una interacción de usuario
+                    if isinstance(event_details, dict):
+                        tipo_evento = event_details.get('tipo_evento')
+                        if tipo_evento in ['copy', 'paste']:
+                            score += 25
+                        elif tipo_evento in ['download', 'file_upload']:
+                            score += 35
+                        elif tipo_evento == 'click':
+                            score += 15
+                        else:
+                            score += 10
+                    else:
+                        score += 10
+
+                # Ajustar según detalles específicos
+                if isinstance(event_details, dict):
+                    if event_details.get('sensitive_fields'):
+                        score += 15
+                    if event_details.get('file_type') in ['exe', 'zip', 'rar']:
+                        score += 25
+                    if event_details.get('nombre_archivo'):
+                        extension = event_details['nombre_archivo'].split('.')[-1].lower()
+                        if extension in ['exe', 'zip', 'rar', 'pdf', 'doc', 'docx']:
+                            score += 20
+
+                # Ajustar según la acción
+                action = log.get('action')
+                if action == 'bloqueado':
+                    score += 30
+                elif action == 'permitido':
+                    score -= 10
+
+                # Asegurar que el score esté entre 0 y 100
+                log['risk_score'] = max(0, min(score, 100))
+
+        return jsonify({
+            "success": True,
+            "data": logs.data,
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        })
+
+    except Exception as e:
+        print(f"Error en get_risk_logs: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 400
+
+@app.route('/api/navigation_logs/comport', methods=['GET'])
+@jwt_required()
+def get_comport_navigation_logs():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Filtros
+        user_id = request.args.get('user_id')
+        tipo = request.args.get('tipo')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+
+        # Obtener logs de navegación filtrados
+        base_query = user_supabase.table('navigation_logs').select('*')
+        if role == 'admin':
+            pass
+        elif role == 'client':
+            base_query = base_query.eq('tenant_id', tenant_id)
+        else:
+            return jsonify({"error": "No autorizado"}), 403
+        if user_id:
+            base_query = base_query.eq('user_id', user_id)
+        if date_from:
+            base_query = base_query.gte('timestamp', date_from)
+        if date_to:
+            base_query = base_query.lte('timestamp', date_to)
+        logs = base_query.order('timestamp', desc=True).limit(1000).execute().data
+
+        # --- Lógica base de comportamientos anómalos ---
+        eventos = []
+        # 1. Cambio de horario
+        for log in logs:
+            hora = log.get('timestamp')
+            if hora:
+                hora_dt = None
+                try:
+                    from dateutil import parser
+                    hora_dt = parser.parse(hora)
+                except Exception:
+                    continue
+                if hora_dt.hour < 8 or hora_dt.hour > 19:
+                    eventos.append({
+                        'usuario': log.get('user_id'),
+                        'tipo': 'Cambio de horario',
+                        'detalle': f"Acceso fuera de horario laboral a {log.get('domain')}",
+                        'hora': hora,
+                        'sospechoso': True
+                    })
+        # 2. Sitio inusual (primer acceso a un dominio para ese usuario)
+        user_domains = {}
+        for log in reversed(logs):  # Procesar en orden cronológico
+            uid = log.get('user_id')
+            dom = log.get('domain')
+            hora = log.get('timestamp')
+            if not uid or not dom:
+                continue
+            if uid not in user_domains:
+                user_domains[uid] = set()
+            if dom not in user_domains[uid]:
+                eventos.append({
+                    'usuario': uid,
+                    'tipo': 'Sitio inusual',
+                    'detalle': f"Primer acceso a dominio desconocido: {dom}",
+                    'hora': hora,
+                    'sospechoso': True
+                })
+                user_domains[uid].add(dom)
+        # 3. Patrón irregular (más de 5 accesos en 10 minutos)
+        from collections import defaultdict
+        import datetime
+        user_times = defaultdict(list)
+        for log in logs:
+            uid = log.get('user_id')
+            hora = log.get('timestamp')
+            if not uid or not hora:
+                continue
+            try:
+                from dateutil import parser
+                hora_dt = parser.parse(hora)
+            except Exception:
+                continue
+            user_times[uid].append(hora_dt)
+        for uid, times in user_times.items():
+            times = sorted(times)
+            for i in range(len(times)):
+                window = [t for t in times if 0 <= (t - times[i]).total_seconds() <= 600]
+                if len(window) > 5:
+                    eventos.append({
+                        'usuario': uid,
+                        'tipo': 'Patrón irregular',
+                        'detalle': f"{len(window)} accesos en menos de 10 minutos",
+                        'hora': times[i].isoformat(),
+                        'sospechoso': True
+                    })
+                    break  # Solo un evento por usuario
+        # Filtros adicionales
+        if tipo:
+            eventos = [e for e in eventos if e['tipo'] == tipo]
+        if user_id:
+            eventos = [e for e in eventos if e['usuario'] == user_id]
+        if date_from:
+            eventos = [e for e in eventos if e['hora'] >= date_from]
+        if date_to:
+            eventos = [e for e in eventos if e['hora'] <= date_to]
+        eventos = sorted(eventos, key=lambda x: x['hora'], reverse=True)
+        total = len(eventos)
+        start = (page - 1) * page_size
+        end = start + page_size
+        data = eventos[start:end]
+        return jsonify({
+            'success': True,
+            'data': data,
+            'total': total,
+            'page': page,
+            'page_size': page_size
+        })
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+@app.route('/api/navigation_logs/geo', methods=['GET'])
+@jwt_required()
+def get_geo_navigation_logs():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Filtros
+        user_id = request.args.get('user_id')
+        pais = request.args.get('pais')
+        ciudad = request.args.get('ciudad')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        estado = request.args.get('estado')  # 'habitual' o 'no_habitual'
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+
+        # Obtener logs de navegación filtrados
+        base_query = user_supabase.table('navigation_logs').select('*')
+        if role == 'admin':
+            pass
+        elif role == 'client':
+            base_query = base_query.eq('tenant_id', tenant_id)
+        else:
+            return jsonify({"error": "No autorizado"}), 403
+        if user_id:
+            base_query = base_query.eq('user_id', user_id)
+        if date_from:
+            base_query = base_query.gte('timestamp', date_from)
+        if date_to:
+            base_query = base_query.lte('timestamp', date_to)
+        logs = base_query.order('timestamp', desc=True).limit(1000).execute().data
+
+        # Lógica para determinar IP habitual/no habitual
+        eventos = []
+        user_ips = {}
+        for log in reversed(logs):  # Procesar en orden cronológico
+            uid = log.get('user_id')
+            ip = log.get('ip_address')
+            ciudad_val = log.get('city') or log.get('ciudad') or log.get('location', {}).get('city')
+            pais_val = log.get('country') or log.get('pais') or log.get('location', {}).get('country')
+            hora = log.get('timestamp')
+            if not uid or not ip:
+                continue
+            # Enriquecer al vuelo si falta ciudad o país
+            if (not ciudad_val or not pais_val):
+                try:
+                    ipinfo_url = f'https://ipinfo.io/{ip}/json'
+                    ipinfo_res = requests.get(ipinfo_url, timeout=2)
+                    if ipinfo_res.status_code == 200:
+                        ipinfo_data = ipinfo_res.json()
+                        ciudad_val = ciudad_val or ipinfo_data.get('city')
+                        pais_val = pais_val or ipinfo_data.get('country')
+                except Exception as e:
+                    print(f"Error consultando ipinfo.io al vuelo: {e}")
+            if uid not in user_ips:
+                user_ips[uid] = set()
+            alerta = False
+            if ip not in user_ips[uid]:
+                alerta = True  # IP no habitual
+                user_ips[uid].add(ip)
+            evento = {
+                'usuario': uid,
+                'ip': ip,
+                'ciudad': ciudad_val or '-',
+                'pais': pais_val or '-',
+                'hora': hora,
+                'alerta': alerta
+            }
+            eventos.append(evento)
+        # Filtros adicionales
+        if pais:
+            eventos = [e for e in eventos if e['pais'] == pais]
+        if ciudad:
+            eventos = [e for e in eventos if e['ciudad'] == ciudad]
+        if estado == 'habitual':
+            eventos = [e for e in eventos if not e['alerta']]
+        if estado == 'no_habitual':
+            eventos = [e for e in eventos if e['alerta']]
+        if user_id:
+            eventos = [e for e in eventos if e['usuario'] == user_id]
+        if date_from:
+            eventos = [e for e in eventos if e['hora'] >= date_from]
+        if date_to:
+            eventos = [e for e in eventos if e['hora'] <= date_to]
+        eventos = sorted(eventos, key=lambda x: x['hora'], reverse=True)
+        total = len(eventos)
+        start = (page - 1) * page_size
+        end = start + page_size
+        data = eventos[start:end]
+        return jsonify({
+            'success': True,
+            'data': data,
+            'total': total,
+            'page': page,
+            'page_size': page_size
+        })
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+@app.route('/api/navigation_logs/stats', methods=['GET'])
+@jwt_required()
+def get_navigation_stats():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Obtener parámetros de filtro
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        # Construir la consulta base
+        query = user_supabase.table('navigation_logs').select('*')
+
+        # Aplicar filtros de tenant_id según el rol
+        if role == 'admin':
+            pass  # Los admins pueden ver todo
+        elif role == 'client':
+            query = query.eq('tenant_id', tenant_id)
+        else:
+            return jsonify({"success": False, "error": "No autorizado"}), 403
+
+        # Aplicar filtros de fecha si se proporcionan
+        if date_from:
+            try:
+                datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                query = query.gte('timestamp', date_from)
+            except ValueError:
+                return jsonify({"success": False, "error": "Formato de fecha inválido"}), 400
+
+        if date_to:
+            try:
+                datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                query = query.lte('timestamp', date_to)
+            except ValueError:
+                return jsonify({"success": False, "error": "Formato de fecha inválido"}), 400
+
+        # Ejecutar la consulta
+        logs = query.execute()
+        print(f"Total de logs obtenidos: {len(logs.data)}")
+
+        if not logs.data:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "total_sites": 0,
+                    "most_frequent_category": None,
+                    "active_users": 0,
+                    "avg_session_time": "0m",
+                    "category_distribution": [],
+                    "user_distribution": [],
+                    "hourly_distribution": []
+                }
+            })
+
+        # Procesar los datos
+        logs_data = logs.data
+
+        # Calcular estadísticas básicas
+        total_sites = len(logs_data)
+        active_users = len(set(log.get('user_id') for log in logs_data if log.get('user_id')))
+        print(f"Usuarios activos: {active_users}")
+
+        # Distribución por categorías
+        category_counts = {}
+        for log in logs_data:
+            policy_info = log.get('policy_info', {}) or {}
+            category = policy_info.get('category', 'sin categoría')
+            category_counts[category] = category_counts.get(category, 0) + 1
+
+        most_frequent_category = max(category_counts.items(), key=lambda x: x[1])[0] if category_counts else None
+        category_distribution = [{"category": k, "count": v} for k, v in category_counts.items()]
+
+        # Distribución por usuario
+        user_counts = {}
+        for log in logs_data:
+            user_id = log.get('user_id')
+            if user_id:
+                user_counts[user_id] = user_counts.get(user_id, 0) + 1
+
+        user_distribution = [{"user_id": k, "count": v} for k, v in user_counts.items()]
+
+        # Distribución por hora
+        hourly_counts = {str(hour).zfill(2): 0 for hour in range(24)}
+        for log in logs_data:
+            timestamp = log.get('timestamp')
+            if timestamp:
+                try:
+                    hour = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).hour
+                    hourly_counts[str(hour).zfill(2)] = hourly_counts.get(str(hour).zfill(2), 0) + 1
+                except (ValueError, AttributeError):
+                    continue
+
+        hourly_distribution = [{"hour": k, "count": v} for k, v in sorted(hourly_counts.items())]
+
+        # Calcular tiempo promedio de sesión
+        user_sessions = {}
+        for log in logs_data:
+            user_id = log.get('user_id')
+            timestamp = log.get('timestamp')
+            if not user_id or not timestamp:
+                continue
+            try:
+                timestamp_dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = []
+                user_sessions[user_id].append(timestamp_dt)
+            except (ValueError, AttributeError) as e:
+                print(f"Error procesando timestamp: {e}")
+                continue
+
+        print(f"Usuarios con logs: {len(user_sessions)}")
+
+        # Calcular duración promedio de sesión
+        session_durations = []
+        SESSION_TIMEOUT = 1800  # 30 minutos en segundos
+
+        for user_id, timestamps in user_sessions.items():
+            if len(timestamps) < 2:
+                continue
+
+            # Ordenar timestamps
+            timestamps.sort()
+            
+            current_session_start = timestamps[0]
+            last_timestamp = timestamps[0]
+            
+            for timestamp in timestamps[1:]:
+                time_diff = (timestamp - last_timestamp).total_seconds()
+                
+                if time_diff > SESSION_TIMEOUT:
+                    # Finalizar sesión actual
+                    session_duration = (last_timestamp - current_session_start).total_seconds()
+                    if session_duration > 0:
+                        session_durations.append(session_duration)
+                        print(f"Sesión para usuario {user_id}: {session_duration/60:.2f} minutos")
+                    # Iniciar nueva sesión
+                    current_session_start = timestamp
+                
+                last_timestamp = timestamp
+            
+            # Procesar última sesión
+            session_duration = (last_timestamp - current_session_start).total_seconds()
+            if session_duration > 0:
+                session_durations.append(session_duration)
+                print(f"Última sesión para usuario {user_id}: {session_duration/60:.2f} minutos")
+
+        print(f"Duración total de sesiones: {sum(session_durations)/60:.2f} minutos")
+        print(f"Número de sesiones válidas: {len(session_durations)}")
+
+        # Calcular tiempo promedio en formato amigable
+        if session_durations:
+            avg_seconds = sum(session_durations) / len(session_durations)
+            print(f"Promedio en segundos: {avg_seconds}")
+            minutes = int(avg_seconds // 60)
+            if minutes < 60:
+                avg_session_time = f"{minutes}m"
+            else:
+                hours = minutes // 60
+                remaining_minutes = minutes % 60
+                if hours < 24:
+                    avg_session_time = f"{hours}h {remaining_minutes}m"
+                else:
+                    days = hours // 24
+                    remaining_hours = hours % 24
+                    if remaining_hours > 0:
+                        avg_session_time = f"{days}d {remaining_hours}h {remaining_minutes}m"
+                    else:
+                        avg_session_time = f"{days}d {remaining_minutes}m"
+        else:
+            avg_session_time = "0m"
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_sites": total_sites,
+                "most_frequent_category": most_frequent_category,
+                "active_users": active_users,
+                "avg_session_time": avg_session_time,
+                "category_distribution": category_distribution,
+                "user_distribution": user_distribution,
+                "hourly_distribution": hourly_distribution
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        print(f"Error en get_navigation_stats: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/alerts/stats', methods=['GET'])
+@jwt_required()
+def get_alerts_stats():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Obtener parámetros de filtro
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        user_id = request.args.get('user_id')
+        category = request.args.get('category')
+
+        # Construir la consulta base
+        query = user_supabase.table('navigation_logs').select('*')
+
+        # Aplicar filtros de tenant_id según el rol
+        if role == 'admin':
+            pass  # Los admins pueden ver todo
+        elif role == 'client':
+            query = query.eq('tenant_id', tenant_id)
+        else:
+            return jsonify({"success": False, "error": "No autorizado"}), 403
+
+        # Aplicar filtros adicionales
+        if date_from:
+            try:
+                datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                query = query.gte('timestamp', date_from)
+            except ValueError:
+                return jsonify({"success": False, "error": "Formato de fecha inválido"}), 400
+
+        if date_to:
+            try:
+                datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                query = query.lte('timestamp', date_to)
+            except ValueError:
+                return jsonify({"success": False, "error": "Formato de fecha inválido"}), 400
+
+        if user_id:
+            query = query.eq('user_id', user_id)
+
+        if category:
+            query = query.eq('policy_info->category', category)
+
+        # Ejecutar la consulta
+        logs = query.execute()
+        logs_data = logs.data
+
+        if not logs_data:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "total_alerts": 0,
+                    "alerts_by_category": {},
+                    "alerts_by_user": {},
+                    "alerts_by_hour": {str(hour).zfill(2): 0 for hour in range(24)},
+                    "alerts_by_severity": {
+                        "high": 0,
+                        "medium": 0,
+                        "low": 0
+                    },
+                    "alerts_trend": []
+                }
+            })
+
+        # Procesar los datos
+        alerts_by_category = {}
+        alerts_by_user = {}
+        alerts_by_hour = {str(hour).zfill(2): 0 for hour in range(24)}
+        alerts_by_severity = {"high": 0, "medium": 0, "low": 0}
+        alerts_trend = []
+
+        for log in logs_data:
+            # Contar por categoría
+            policy_info = log.get('policy_info') or {}
+            category = policy_info.get('category', 'sin categoría')
+            alerts_by_category[category] = alerts_by_category.get(category, 0) + 1
+
+            # Contar por usuario
+            user_id = log.get('user_id')
+            if user_id:
+                alerts_by_user[user_id] = alerts_by_user.get(user_id, 0) + 1
+
+            # Contar por hora
+            timestamp = log.get('timestamp')
+            if timestamp:
+                try:
+                    hour = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).hour
+                    alerts_by_hour[str(hour).zfill(2)] = alerts_by_hour.get(str(hour).zfill(2), 0) + 1
+                except (ValueError, AttributeError):
+                    continue
+
+            # Contar por severidad
+            risk_score = log.get('risk_score')
+            if risk_score is None:
+                risk_score = 0
+            if risk_score > 80:
+                alerts_by_severity["high"] += 1
+            elif risk_score > 50:
+                alerts_by_severity["medium"] += 1
+            else:
+                alerts_by_severity["low"] += 1
+
+            # Preparar tendencia
+            if timestamp:
+                try:
+                    date = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).date()
+                    alerts_trend.append(date.isoformat())
+                except (ValueError, AttributeError):
+                    continue
+
+        # Procesar tendencia
+        trend_data = {}
+        for date in alerts_trend:
+            trend_data[date] = trend_data.get(date, 0) + 1
+        alerts_trend = [{"date": date, "count": count} for date, count in sorted(trend_data.items())]
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_alerts": len(logs_data),
+                "alerts_by_category": alerts_by_category,
+                "alerts_by_user": alerts_by_user,
+                "alerts_by_hour": alerts_by_hour,
+                "alerts_by_severity": alerts_by_severity,
+                "alerts_trend": alerts_trend
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        print(f"Error en get_alerts_stats: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# --- ENDPOINTS DE GRUPOS DE USUARIOS ---
+@app.route('/api/groups', methods=['POST'])
+@jwt_required()
+def create_group():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        request_tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        data = request.get_json()
+        name = data.get('name')
+        description = data.get('description')
+        user_ids = data.get('user_ids', []) # Lista de IDs de usuarios para el grupo
+
+        if not name:
+            return jsonify({"success": False, "error": "El nombre del grupo es requerido"}), 400
+
+        target_tenant_id = None
+        if role == 'client':
+            target_tenant_id = request_tenant_id
+        elif role == 'admin':
+            target_tenant_id = data.get('tenant_id', request_tenant_id) 
+            if not target_tenant_id and role == 'admin':
+                 pass # Puede ser None si son grupos globales para admins. Ajustar según necesidad.
+
+
+        # Validar que los usuarios existan y pertenezcan al tenant_id correcto (si aplica)
+        if target_tenant_id and user_ids:
+            users_check = user_supabase.table('users').select('id').eq('tenant_id', target_tenant_id).in_('id', user_ids).execute()
+            if len(users_check.data) != len(set(user_ids)): # Compara con set para evitar duplicados en user_ids
+                # Identificar usuarios faltantes o no pertenecientes
+                existing_user_ids_in_tenant = {str(u['id']) for u in users_check.data}
+                missing_or_invalid_ids = [uid for uid in user_ids if str(uid) not in existing_user_ids_in_tenant]
+                print(f"Usuarios inválidos o no encontrados en el tenant {target_tenant_id}: {missing_or_invalid_ids}")
+                return jsonify({"success": False, "error": f"Algunos usuarios no existen o no pertenecen al tenant especificado: {missing_or_invalid_ids}"}), 400
+        
+        # Insertar el nuevo grupo
+        group_data = {
+            'name': name,
+            'description': description
+        }
+        # Solo añadir tenant_id si no es None
+        if target_tenant_id:
+            group_data['tenant_id'] = target_tenant_id
+        
+        new_group_res = user_supabase.table('groups').insert(group_data).execute()
+
+        if not new_group_res.data:
+            # Intenta obtener más información del error de Supabase si está disponible
+            error_message = "No se pudo crear el grupo"
+            if hasattr(new_group_res, 'error') and new_group_res.error:
+                error_message += f": {new_group_res.error.message}"
+            print(f"Error al crear grupo en Supabase: {error_message}, data: {group_data}")
+            return jsonify({"success": False, "error": error_message}), 500
+        
+        created_group = new_group_res.data[0]
+        group_id = created_group['id']
+
+        # Asociar usuarios al grupo
+        if user_ids:
+            # Asegurarse de que no hay user_ids duplicados
+            unique_user_ids = list(set(user_ids))
+            group_user_associations = []
+            for user_id in unique_user_ids:
+                assoc_data = {'group_id': group_id, 'user_id': user_id}
+                # Solo añadir tenant_id a la tabla de cruce si el grupo lo tiene.
+                if target_tenant_id: 
+                    assoc_data['tenant_id'] = target_tenant_id
+                group_user_associations.append(assoc_data)
+            
+            if group_user_associations: # Solo insertar si hay asociaciones
+                assoc_res = user_supabase.table('group_users').insert(group_user_associations).execute()
+                if hasattr(assoc_res, 'error') and assoc_res.error:
+                    # Si falla la asociación, el grupo ya fue creado. Se podría revertir o loggear.
+                    print(f"Error al asociar usuarios al grupo {group_id}: {assoc_res.error.message}")
+                    # Devolver el grupo creado pero con una advertencia o un error parcial.
+                    # Por ahora, devolvemos el grupo pero loggeamos el error.
+                    # Considerar una transacción si es crítico que ambas operaciones (crear grupo, añadir miembros) sean atómicas.
+
+        return jsonify({"success": True, "data": created_group}), 201
+
+    except Exception as e:
+        print(f"Error en create_group: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/groups', methods=['GET'])
+@jwt_required()
+def get_groups():
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        base_query = user_supabase.table('groups').select('id, name, description, tenant_id, created_at, updated_at')
+        
+        if role == 'client':
+            base_query = base_query.eq('tenant_id', tenant_id)
+        elif role == 'admin':
+            filter_tenant_id = request.args.get('tenant_id')
+            if filter_tenant_id:
+                try:
+                    UUID(filter_tenant_id, version=4) # Validar que es un UUID
+                    base_query = base_query.eq('tenant_id', filter_tenant_id)
+                except ValueError:
+                    return jsonify({"success": False, "error": "Formato de tenant_id inválido para el filtro."}), 400
+            # Si admin no filtra, ve todos los grupos que RLS le permita.
+        else:
+            return jsonify({"success": False, "error": "No autorizado para ver grupos"}), 403
+
+        groups_res = base_query.order('name', desc=False).execute()
+        
+        if hasattr(groups_res, 'error') and groups_res.error:
+            print(f"Error al obtener grupos: {groups_res.error.message}")
+            return jsonify({"success": False, "error": f"Error al obtener grupos: {groups_res.error.message}"}), 500
+
+        processed_groups = []
+        if groups_res.data:
+            group_ids = [g['id'] for g in groups_res.data]
+            
+            # Obtener conteo de usuarios por grupo
+            # La columna group_id en group_users es la FK a groups.id
+            counts_res = user_supabase.table('group_users').select('group_id, user_id').in_('group_id', group_ids).execute() # Contamos user_id para obtener el número de usuarios
+            
+            user_counts = {}
+            if counts_res.data:
+                for row in counts_res.data:
+                    gid = row['group_id']
+                    user_counts[gid] = user_counts.get(gid, 0) + 1
+
+            # Obtener los miembros (id, email) de cada grupo
+            # Esta consulta puede ser pesada si hay muchos grupos/usuarios.
+            # group_members_res = user_supabase.table('group_users').select('group_id, users(id, email)').in_('group_id', group_ids).execute()
+            # La anterior tiene una sintaxis incorrecta para el join selectivo.
+            # Necesitas que 'users' sea una relación en 'group_users' o usar una función RPC.
+            # Alternativa: Obtener todos los (group_id, user_id) y luego info de users.
+            
+            group_user_pairs_res = user_supabase.table('group_users').select('group_id, user_id').in_('group_id', group_ids).execute()
+            
+            all_user_ids_in_groups = list(set([pair['user_id'] for pair in group_user_pairs_res.data if pair.get('user_id')]))
+            users_info = {}
+            if all_user_ids_in_groups:
+                users_data_res = user_supabase.table('users').select('id, email').in_('id', all_user_ids_in_groups).execute()
+                if users_data_res.data:
+                    for u_info in users_data_res.data:
+                        users_info[str(u_info['id'])] = {'id': str(u_info['id']), 'email': u_info['email']}
+            
+            members_by_group = {}
+            if group_user_pairs_res.data:
+                for pair in group_user_pairs_res.data:
+                    gid = pair['group_id']
+                    uid = str(pair['user_id'])
+                    if gid not in members_by_group:
+                        members_by_group[gid] = []
+                    if uid in users_info: # Solo añadir si tenemos la info del usuario (debería ser siempre si no hay datos huérfanos)
+                        members_by_group[gid].append(users_info[uid])
+
+
+            for group in groups_res.data:
+                gid = group['id']
+                processed_group = {
+                    "id": gid,
+                    "name": group["name"],
+                    "description": group.get("description"),
+                    "tenant_id": group.get("tenant_id"),
+                    "created_at": group.get("created_at"),
+                    "updated_at": group.get("updated_at"),
+                    "user_count": user_counts.get(gid, 0),
+                    "users": members_by_group.get(gid, []) 
+                }
+                processed_groups.append(processed_group)
+
+        return jsonify({"success": True, "data": processed_groups})
+
+    except Exception as e:
+        print(f"Error en get_groups: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/groups/<group_id_str>', methods=['PUT']) # Cambiado a group_id_str para claridad
+@jwt_required()
+def update_group(group_id_str): # Cambiado a group_id_str
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        request_tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        try:
+            group_id = UUID(group_id_str, version=4) # Validar y convertir a UUID
+        except ValueError:
+            return jsonify({"success": False, "error": "Formato de group_id inválido."}), 400
+
+        data = request.get_json()
+        name = data.get('name')
+        description = data.get('description')
+        user_ids_str = data.get('user_ids') # Lista completa de IDs de usuarios para el grupo (como strings)
+
+        # Validar user_ids si se proporcionan
+        user_ids_uuid = []
+        if user_ids_str is not None:
+            try:
+                user_ids_uuid = [UUID(uid, version=4) for uid in user_ids_str]
+                user_ids_uuid = list(set(user_ids_uuid)) # Eliminar duplicados
+            except ValueError:
+                return jsonify({"success": False, "error": "Formato de user_id inválido en la lista."}), 400
+        
+        # Verificar que el grupo existe y el usuario tiene permiso
+        group_check_query = user_supabase.table('groups').select('id, tenant_id').eq('id', group_id)
+        
+        # Solo los clients están restringidos a su tenant_id explícitamente aquí.
+        # Admin RLS debería permitir o denegar basado en su propia lógica.
+        if role == 'client':
+            group_check_query = group_check_query.eq('tenant_id', request_tenant_id)
+        
+        group_check_res = group_check_query.maybe_single().execute()
+
+        if not group_check_res.data:
+            return jsonify({"success": False, "error": "Grupo no encontrado o no autorizado"}), 404
+        
+        current_group_tenant_id_str = group_check_res.data.get('tenant_id')
+        # Convertir current_group_tenant_id_str a UUID si no es None
+        current_group_tenant_id = UUID(current_group_tenant_id_str) if current_group_tenant_id_str else None
+
+
+        update_payload = {}
+        if name is not None: # Permitir string vacío para nombre si la lógica de negocio lo permite
+            update_payload['name'] = name
+        if description is not None: # Permitir string vacío para descripción
+            update_payload['description'] = description
+        
+        # Solo actualizar si hay algo que cambiar en la tabla 'groups'
+        if update_payload:
+            update_payload['updated_at'] = datetime.utcnow().isoformat()
+            updated_group_res = user_supabase.table('groups').update(update_payload).eq('id', group_id).execute()
+            if hasattr(updated_group_res, 'error') and updated_group_res.error:
+                 print(f"Error al actualizar tabla groups: {updated_group_res.error.message}")
+                 return jsonify({"success": False, "error": f"Error al actualizar el grupo: {updated_group_res.error.message}"}), 500
+            if not updated_group_res.data: # Debería haber datos si la actualización fue exitosa
+                 return jsonify({"success": False, "error": "No se pudo actualizar el grupo (no se devolvieron datos)"}), 500
+
+        # Actualizar asociaciones de usuarios si se proporcionan user_ids_uuid
+        if user_ids_str is not None: # Lista vacía [] significa quitar todos los usuarios
+            # Validar usuarios contra el tenant del grupo
+            if current_group_tenant_id and user_ids_uuid: # Solo validar si el grupo tiene tenant y se pasan user_ids
+                users_check = user_supabase.table('users').select('id').eq('tenant_id', current_group_tenant_id).in_('id', [str(uid) for uid in user_ids_uuid]).execute()
+                if len(users_check.data) != len(user_ids_uuid):
+                    existing_user_ids_in_tenant = {str(u['id']) for u in users_check.data}
+                    missing_or_invalid_ids = [str(uid) for uid in user_ids_uuid if str(uid) not in existing_user_ids_in_tenant]
+                    print(f"Usuarios inválidos en PUT /api/groups/{group_id}: {missing_or_invalid_ids}")
+                    return jsonify({"success": False, "error": f"Algunos usuarios no existen o no pertenecen al tenant del grupo: {missing_or_invalid_ids}"}), 400
+            
+            # Eliminar asociaciones existentes para este grupo
+            delete_assoc_res = user_supabase.table('group_users').delete().eq('group_id', group_id).execute()
+            if hasattr(delete_assoc_res, 'error') and delete_assoc_res.error:
+                print(f"Error al eliminar asociaciones de usuarios para grupo {group_id}: {delete_assoc_res.error.message}")
+                # Continuar de todos modos, ya que el grupo podría haber sido actualizado.
+                # O devolver un error si esto es crítico.
+
+            # Crear nuevas asociaciones
+            if user_ids_uuid: # Solo si la lista no está vacía
+                group_user_associations = []
+                for user_id_assoc_uuid in user_ids_uuid:
+                    assoc_data = {'group_id': group_id, 'user_id': user_id_assoc_uuid}
+                    if current_group_tenant_id:
+                        assoc_data['tenant_id'] = current_group_tenant_id # Añadir tenant_id del grupo
+                    group_user_associations.append(assoc_data)
+                
+                if group_user_associations:
+                    assoc_res = user_supabase.table('group_users').insert(group_user_associations).execute()
+                    if hasattr(assoc_res, 'error') and assoc_res.error:
+                        print(f"Error al crear nuevas asociaciones de usuarios para grupo {group_id}: {assoc_res.error.message}")
+                        # Considerar el manejo de este error.
+        
+        # Obtener el grupo completamente actualizado para la respuesta (similar a get_groups)
+        # Esto asegura que devolvemos el estado más reciente con conteo y usuarios.
+        final_group_res = user_supabase.table('groups').select('id, name, description, tenant_id, created_at, updated_at').eq('id', group_id).single().execute()
+        if not final_group_res.data:
+             return jsonify({"success": False, "error": "No se pudo obtener el grupo actualizado después de la operación"}), 500
+
+        group_for_response_base = final_group_res.data
+        gid_resp = group_for_response_base['id']
+
+        counts_resp_res = user_supabase.table('group_users').select('user_id', count='exact').eq('group_id', gid_resp).execute() # Usar count='exact'
+        user_count_resp = counts_resp_res.count if hasattr(counts_resp_res, 'count') else 0
+        
+        members_resp_pairs = user_supabase.table('group_users').select('user_id').eq('group_id', gid_resp).execute()
+        members_resp_user_ids = [str(pair['user_id']) for pair in members_resp_pairs.data if pair.get('user_id')]
+        
+        users_info_resp = {}
+        if members_resp_user_ids:
+            users_data_resp_final = user_supabase.table('users').select('id, email').in_('id', members_resp_user_ids).execute()
+            if users_data_resp_final.data:
+                for u_info_f in users_data_resp_final.data:
+                    users_info_resp[str(u_info_f['id'])] = {'id': str(u_info_f['id']), 'email': u_info_f['email']}
+        
+        final_user_list = [users_info_resp[uid_str] for uid_str in members_resp_user_ids if uid_str in users_info_resp]
+
+        processed_group_final = {
+            "id": gid_resp,
+            "name": group_for_response_base["name"],
+            "description": group_for_response_base.get("description"),
+            "tenant_id": group_for_response_base.get("tenant_id"),
+            "created_at": group_for_response_base.get("created_at"),
+            "updated_at": group_for_response_base.get("updated_at"),
+            "user_count": user_count_resp,
+            "users": final_user_list
+        }
+        return jsonify({"success": True, "data": processed_group_final})
+
+    except Exception as e:
+        print(f"Error en update_group (group_id: {group_id_str}): {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/groups/<group_id_str>', methods=['DELETE']) # Cambiado a group_id_str
+@jwt_required()
+def delete_group(group_id_str): # Cambiado a group_id_str
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        request_tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        try:
+            group_id = UUID(group_id_str, version=4) # Validar y convertir a UUID
+        except ValueError:
+            return jsonify({"success": False, "error": "Formato de group_id inválido."}), 400
+
+        # Verificar que el grupo existe y el usuario tiene permiso
+        group_check_query = user_supabase.table('groups').select('id, tenant_id').eq('id', group_id)
+        if role == 'client':
+            group_check_query = group_check_query.eq('tenant_id', request_tenant_id)
+        
+        group_check_res = group_check_query.maybe_single().execute()
+
+        if not group_check_res.data:
+            return jsonify({"success": False, "error": "Grupo no encontrado o no autorizado para eliminar"}), 404
+
+        # Eliminar asociaciones de usuarios primero (dependencia).
+        # Esto es importante si hay FK con ON DELETE CASCADE, pero hacerlo explícitamente es más seguro.
+        delete_assoc_res = user_supabase.table('group_users').delete().eq('group_id', group_id).execute()
+        if hasattr(delete_assoc_res, 'error') and delete_assoc_res.error:
+             print(f"Error al eliminar asociaciones de usuarios para grupo {group_id} durante DELETE: {delete_assoc_res.error.message}")
+             # Considerar si se debe detener la eliminación del grupo aquí. Por ahora, continuamos.
+
+        # Eliminar el grupo
+        deleted_group_res = user_supabase.table('groups').delete().eq('id', group_id).execute()
+
+        if hasattr(deleted_group_res, 'error') and deleted_group_res.error:
+            print(f"Error al eliminar grupo {group_id} de la tabla groups: {deleted_group_res.error.message}")
+            return jsonify({"success": False, "error": f"Error al eliminar el grupo: {deleted_group_res.error.message}"}), 500
+        
+        if not deleted_group_res.data and not (hasattr(deleted_group_res, 'error') and deleted_group_res.error):
+            # Si no hay datos Y no hay error, podría significar que la RLS lo previno silenciosamente o ya no existía
+            # (aunque la comprobación inicial debería haberlo detectado).
+            # Supabase delete() devuelve los registros eliminados. Si está vacío, es posible que no se haya eliminado nada.
+             print(f"Advertencia: La eliminación del grupo {group_id} no devolvió datos y no reportó error explícito.")
+             # Podríamos tratar esto como un error o no, dependiendo de la expectativa.
+             # Por seguridad, si no hay datos, asumimos que algo no fue como se esperaba, a menos que la RLS sea la causa.
+             # return jsonify({"success": False, "error": "El grupo no pudo ser eliminado o ya no existía."}), 404
+
+
+        return jsonify({"success": True, "message": "Grupo eliminado correctamente"})
+
+    except Exception as e:
+        print(f"Error en delete_group (group_id: {group_id_str}): {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# --- FIN ENDPOINTS DE GRUPOS DE USUARIOS ---
 
 if __name__ == '__main__':
     import os
