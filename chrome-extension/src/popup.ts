@@ -7,12 +7,15 @@ const content = document.getElementById('athos-content');
 
 function renderLogin(errorMsg = '') {
   content!.innerHTML = `
-    <div class="athos-card">
-      <form id="athos-login-form">
-        <input class="athos-input" type="email" id="athos-email" placeholder="Correo electrónico" required autocomplete="username" />
-        <input class="athos-input" type="password" id="athos-password" placeholder="Contraseña" required autocomplete="current-password" />
-        ${errorMsg ? `<div class="athos-error">${errorMsg}</div>` : ''}
-        <button class="athos-btn" type="submit">Iniciar protección</button>
+    <div class="athos-bg-black athos-login-outer">
+      <img src="typo.png" class="athos-typo-new" alt="Athos logo" />
+      <div class="athos-login-title">Iniciar sesión</div>
+      <div class="athos-login-subtitle">Athos Cybersecurity Platform</div>
+      <form id="athos-login-form" class="athos-login-form-new">
+        <input class="athos-input-new" type="email" id="athos-email" placeholder="Email" required autocomplete="username" />
+        <input class="athos-input-new" type="password" id="athos-password" placeholder="Contraseña" required autocomplete="current-password" />
+        ${errorMsg ? `<div class="athos-error-new">${errorMsg}</div>` : ''}
+        <button class="athos-btn-new" type="submit">Iniciar Sesión</button>
       </form>
     </div>
   `;
@@ -42,37 +45,26 @@ function renderLogin(errorMsg = '') {
 
 function renderProtected() {
   content!.innerHTML = `
-    <div class="athos-card">
-      <div class="athos-status">Protección activa</div>
-      <div class="athos-counter" id="athos-threats">0</div>
-      <div class="athos-label">Amenazas bloqueadas hoy</div>
-      <div class="athos-logout" id="athos-logout">Terminar protección</div>
+    <div class="athos-bg-black athos-login-outer">
+      <img src="typo.png" class="athos-typo-new" alt="Athos logo" />
+      <img src="athos.gif" class="athos-gif-new" alt="Animación Athos" />
+      <div class="athos-protected-label">Protección activa</div>
+      <a href="#" id="athos-logout" class="athos-link-red">Terminar protección</a>
     </div>
   `;
-  document.getElementById('athos-logout')!.onclick = async () => {
-    // Obtener la pestaña actual antes de hacer logout
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const currentTab = tabs[0];
-    
-    // Enviar mensaje al background para registrar el logout
-    if (currentTab?.url) {
-      chrome.runtime.sendMessage({
-        type: 'user_logout',
-        data: {
-          url: currentTab.url,
-          timestamp: new Date().toISOString()
-        }
-      });
-    }
-    
-    // Esperar un momento para que se registre el evento
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    // Hacer logout
+  document.getElementById('athos-logout')!.onclick = async (e) => {
+    e.preventDefault();
+    // Enviamos evento de logout para registro
+    chrome.runtime.sendMessage({
+      type: 'user_logout',
+      data: {
+        url: window.location.href,
+        timestamp: new Date().toISOString()
+      }
+    });
     await chrome.storage.local.remove('jwt_token');
     renderLogin();
   };
-  // Aquí podrías actualizar el contador de amenazas si en el futuro hay endpoint
 }
 
 async function checkAuth() {
@@ -104,4 +96,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.jwt_token) {
     checkAuth();
   }
-}); 
+});

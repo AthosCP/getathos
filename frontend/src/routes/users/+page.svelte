@@ -393,7 +393,7 @@
             </div>
             <button
               on:click={() => showCreateModal = true}
-              class="px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+              class="px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-[#00a1ff] hover:bg-[#0081cc]"
             >
               Crear Nuevo Usuario
             </button>
@@ -467,7 +467,7 @@
                     resetGroupModalState();
                     showCreateGroupModal = true;
                   }}
-                  class="px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+                  class="px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-[#00a1ff] hover:bg-[#0081cc]"
                 >
                   Crear Nuevo Grupo
                 </button>
@@ -613,7 +613,7 @@
           <button
             type="button"
             on:click={createUser}
-            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm"
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-[#00a1ff] text-base font-medium text-white hover:bg-[#0081cc] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#00a1ff] sm:ml-3 sm:w-auto sm:text-sm"
           >
             Guardar
           </button>
@@ -684,7 +684,7 @@
         <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
           <button
             on:click={updateUser}
-            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm"
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-[#00a1ff] text-base font-medium text-white hover:bg-[#0081cc] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#00a1ff] sm:ml-3 sm:w-auto sm:text-sm"
           >
             Guardar
           </button>
@@ -752,7 +752,7 @@
           <button
             type="button"
             on:click={showEditGroupModal ? updateGroup : createGroup}
-            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm"
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-[#00a1ff] text-base font-medium text-white hover:bg-[#0081cc] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#00a1ff] sm:ml-3 sm:w-auto sm:text-sm"
           >
             {showEditGroupModal ? 'Guardar Cambios' : 'Crear Grupo'}
           </button>

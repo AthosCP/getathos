@@ -1,0 +1,813 @@
+body, .athos-bg-black {
+  background: #000 !important;
+}
+
+body {
+  width: 350px;
+  min-height: 400px;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  color: #fff;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.athos-container {
+  flex: 1;
+  padding: 20px;
+}
+
+.athos-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 32px;
+  padding: 0;
+}
+
+h2 {
+  margin: 0 0 15px 0;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+h3 {
+  margin: 15px 0 10px 0;
+  color: #f8f9fa;
+  font-size: 18px;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  background-color: #121212;
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  border: 1px solid #222;
+  margin-top: 10px;
+  width: 85%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.form-title {
+  color: #00a1ff;
+  text-align: center;
+  font-size: 18px;
+  margin-bottom: 20px;
+}
+
+.input-group {
+  position: relative;
+  width: 100%;
+}
+
+.athos-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #333;
+  background-color: #23232b;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: all 0.3s ease;
+  box-sizing: border-box;
+}
+
+.athos-input:focus {
+  border-color: #a259ff;
+  outline: none;
+  box-shadow: 0 0 0 2px #a259ff44;
+}
+
+.athos-btn {
+  padding: 9px 0;
+  background-color: #00a1ff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: background-color 0.2s, box-shadow 0.2s;
+  width: 100%;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  box-shadow: 0 0 8px #00a1ff55;
+}
+
+.athos-btn:hover {
+  background-color: #0081cc;
+}
+
+.athos-error {
+  color: #ff4d4f;
+  padding: 7px 0 0 0;
+  font-size: 12px;
+  text-align: center;
+}
+
+#welcomeMessage {
+  background-color: #1a1a1a;
+  color: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  box-shadow: 0 4px 15px rgba(0, 161, 255, 0.2);
+  text-align: center;
+}
+
+#policiesList {
+  margin: 15px 0;
+  background-color: #1a1a1a;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 161, 255, 0.2);
+}
+
+#policiesList h3 {
+  margin-top: 0;
+  border-bottom: 1px solid #333;
+  padding-bottom: 10px;
+  color: #00a1ff;
+}
+
+#policiesList ul {
+  list-style: none;
+  padding: 0;
+  margin-top: 10px;
+}
+
+#policiesList li {
+  padding: 10px 0;
+  border-bottom: 1px solid #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#policiesList li span.allow {
+  color: #52c41a;
+  font-weight: 500;
+}
+
+#policiesList li span.block {
+  color: #ff4d4f;
+  font-weight: 500;
+}
+
+.athos-logout-btn {
+  background-color: transparent;
+  border: 1px solid #ff4d4f;
+  color: #ff4d4f;
+  width: auto;
+  margin-top: 15px;
+}
+
+.athos-logout-btn:hover {
+  background-color: rgba(255, 77, 79, 0.1);
+  border-color: #ff4d4f;
+}
+
+.block-counter {
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  color: #ff4d4f;
+  padding: 15px;
+  border-radius: 8px;
+  margin: 15px 0;
+  font-size: 14px;
+}
+
+.block-counter h4 {
+  margin: 0 0 5px 0;
+  font-size: 16px;
+  color: #00a1ff;
+}
+
+.block-counter p {
+  margin: 0;
+}
+
+.block-counter span {
+  font-weight: bold;
+  color: #ff4d4f;
+}
+
+/* Estilos Athos */
+.athos-logo {
+  width: 90px;
+  height: 90px;
+  margin-bottom: 10px;
+}
+
+.athos-logo-glow {
+  filter: drop-shadow(0 0 16px #00a1ff) drop-shadow(0 0 32px #00a1ff);
+}
+
+.athos-title {
+  font-size: 2.1rem;
+  font-weight: 900;
+  color: #00a1ff;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.athos-subtitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #00a1ff;
+  letter-spacing: 1.5px;
+  margin-bottom: 10px;
+}
+
+.athos-glow {
+  text-shadow:
+    0 0 8px #00a1ff,
+    0 0 16px #00a1ff,
+    0 0 32px #00a1ff,
+    0 0 48px #00a1ff;
+}
+
+.athos-card-glow {
+  box-shadow: 0 0 24px 4px #00a1ff55, 0 0 0 1.5px #00a1ff;
+}
+
+.athos-card {
+  background: #1a1a1a;
+  border-radius: 12px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  padding: 28px 24px 24px 24px;
+  margin: 0 0 20px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1.5px solid #222;
+  min-width: 300px;
+}
+
+.athos-status {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #00a1ff;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.athos-counter {
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #00a1ff;
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.athos-label {
+  font-size: 1rem;
+  color: #ccc;
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.athos-footer {
+  display: block;
+  margin-top: 18px;
+  text-align: center;
+  color: #00a1ff99;
+  font-size: 13px;
+  letter-spacing: 1px;
+  text-shadow: 0 0 8px #00a1ff, 0 0 16px #00a1ff;
+  background: none;
+  border: none;
+}
+
+.athos-footer-glow {
+  filter: drop-shadow(0 0 8px #00a1ff);
+}
+
+/* Efectos neón */
+.athos-header {
+  position: relative;
+}
+
+.athos-logo {
+  filter: drop-shadow(0 0 5px rgba(0, 161, 255, 0.7));
+}
+
+.athos-title {
+  text-shadow: 0 0 5px rgba(0, 161, 255, 0.7), 0 0 10px rgba(0, 161, 255, 0.5);
+}
+
+.athos-vertical-center {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.athos-branding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+
+.athos-icon {
+  width: 70px;
+  height: 70px;
+  margin-bottom: 8px;
+  display: block;
+  filter: drop-shadow(0 0 16px #00a1ff) drop-shadow(0 0 32px #00a1ff);
+}
+
+.athos-typo {
+  width: 180px;
+  height: auto;
+  margin-bottom: 0;
+  display: block;
+  filter: drop-shadow(0 0 12px #00a1ff) drop-shadow(0 0 24px #00a1ff);
+}
+
+.athos-card-glow-morado {
+  box-shadow: 0 0 24px 3px #a259ffcc, 0 0 0 1.5px #a259ff;
+  border: 1.5px solid #a259ff;
+  background: #18181c;
+}
+
+.athos-compact {
+  min-height: 340px;
+  max-width: 320px;
+  margin: 0 auto;
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.athos-compact-branding {
+  margin-bottom: 10px;
+}
+
+.athos-card-compact {
+  padding: 16px 12px 12px 12px;
+  min-width: 220px;
+  max-width: 260px;
+  margin-bottom: 12px;
+}
+
+.athos-typo-protected {
+  width: 140px;
+  margin-bottom: 8px;
+}
+
+.athos-protected-title {
+  color: #fff;
+  font-family: 'Bebas Neue', Arial, sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 10px;
+  letter-spacing: 1.2px;
+  text-shadow: none;
+}
+
+.athos-gif-card {
+  width: 90px;
+  height: 90px;
+  display: block;
+  margin: 0 auto 10px auto;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.athos-link-glow {
+  display: block;
+  text-align: center;
+  color: #00a1ff;
+  text-decoration: underline;
+  font-size: 1rem;
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-weight: 600;
+  text-shadow: 0 0 8px #00a1ff, 0 0 16px #00a1ff;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.athos-link-glow:hover {
+  color: #a259ff;
+  text-shadow: 0 0 12px #a259ff, 0 0 24px #a259ff;
+}
+
+.athos-gif-wide {
+  width: 220px;
+  height: 220px;
+  display: block;
+  margin: 0 auto 16px auto;
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+.athos-card-wide {
+  min-width: 220px;
+  max-width: 220px;
+}
+
+.athos-link-red {
+  display: block;
+  text-align: center;
+  color: #ff3b3b;
+  text-decoration: underline;
+  font-size: 0.92rem;
+  margin-top: 6px;
+  margin-bottom: 0;
+  font-weight: 600;
+  text-shadow: none;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.athos-link-red:hover {
+  color: #ff0000;
+  text-decoration: underline;
+}
+
+.athos-card-auth {
+  width: 220px;
+  min-width: 220px;
+  max-width: 220px;
+  padding: 18px 14px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.athos-typo-card {
+  width: 140px;
+  margin-bottom: 14px;
+  display: block;
+  filter: drop-shadow(0 0 10px #00a1ff) drop-shadow(0 0 18px #00a1ff);
+}
+
+.athos-form-auth {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.athos-card-supercompact {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+  padding: 14px 10px 10px 10px;
+  border-radius: 12px;
+}
+
+.athos-typo-card {
+  width: 110px;
+  margin-bottom: 10px;
+  display: block;
+  filter: drop-shadow(0 0 8px #00a1ff) drop-shadow(0 0 12px #00a1ff);
+}
+
+.athos-form-auth {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.athos-gif-card {
+  width: 60px;
+  height: 60px;
+  display: block;
+  margin: 0 auto 8px auto;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.athos-protected-title {
+  font-size: 1.05rem;
+  margin-bottom: 7px;
+}
+
+.athos-link-red {
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.athos-bg-black {
+  background: #000 !important;
+  min-height: 100vh;
+}
+
+.athos-login-outer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px;
+}
+
+.athos-typo-new {
+  width: 140px;
+  max-width: 90vw;
+  margin-bottom: 18px;
+  margin-top: 0;
+  display: block;
+  filter: drop-shadow(0 0 12px #00a1ff) drop-shadow(0 0 24px #00a1ff);
+}
+
+.athos-gif-new {
+  width: 90px;
+  height: 90px;
+  margin-bottom: 22px;
+  display: block;
+  border-radius: 12px;
+  box-shadow: 0 0 18px #00a1ff44;
+}
+
+.athos-login-form-new,
+.athos-login-form-small {
+  width: 100%;
+  max-width: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+.athos-input-new,
+.athos-input-small {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #333;
+  background-color: #18181c;
+  color: #fff;
+  border-radius: 5px;
+  font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.athos-input-new::placeholder,
+.athos-input-small::placeholder {
+  color: #888;
+}
+
+.athos-input-new:focus,
+.athos-input-small:focus {
+  border-color: #00a1ff;
+  outline: none;
+  box-shadow: 0 0 0 2.5px #00a1ff33;
+}
+
+.athos-btn-new,
+.athos-btn-small {
+  width: 100%;
+  padding: 9px 0;
+  background-color: #00a1ff;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 2px;
+  box-shadow: 0 0 8px #00a1ff55;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.athos-btn-new:hover,
+.athos-btn-small:hover {
+  background: #0081cc;
+}
+
+.athos-error-new {
+  color: #ff4d4f;
+  font-size: 13px;
+  text-align: center;
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.athos-protected-label {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-align: center;
+  margin: 18px 0 12px 0;
+  letter-spacing: 1px;
+}
+
+.athos-btn-logout {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.athos-small {
+  max-width: 180px;
+  margin: 0 auto;
+}
+
+.athos-typo-small {
+  width: 70px;
+  max-width: 70px;
+  margin-bottom: 10px;
+}
+
+.athos-login-title {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 800;
+  text-align: center;
+  margin-bottom: 2px;
+  margin-top: 0;
+  letter-spacing: 0.5px;
+}
+
+.athos-login-subtitle {
+  color: #00a1ff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 10px;
+  margin-top: 0;
+  letter-spacing: 0.2px;
+}
+
+.athos-login-form-small {
+  width: 100%;
+  gap: 7px;
+}
+
+.athos-input-small {
+  font-size: 12px;
+  padding: 7px 8px;
+  border-radius: 4px;
+}
+
+.athos-btn-small {
+  font-size: 13px;
+  padding: 8px 0;
+  border-radius: 4px;
+}
+
+.athos-error-small {
+  font-size: 11px;
+}
+
+.athos-gif-small {
+  width: 45px;
+  height: 45px;
+  margin-bottom: 10px;
+  border-radius: 7px;
+}
+
+.athos-protected-label-small {
+  font-size: 0.85rem;
+  margin: 10px 0 7px 0;
+}
+
+.athos-link-small {
+  font-size: 0.8rem;
+  margin-top: 2px;
+  color: #ff3b3b !important;
+  text-align: center;
+  text-decoration: underline;
+  font-weight: 600;
+  display: block;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.athos-link-small:hover {
+  color: #ff0000 !important;
+}
+
+html, body, .athos-bg-black, .athos-login-outer {
+  width: 240px !important;
+  min-width: 240px !important;
+  max-width: 240px !important;
+  height: 340px !important;
+  min-height: 340px !important;
+  max-height: 340px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+  background: #000 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
+}
+
+.athos-login-outer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px;
+}
+
+.athos-login-form-new,
+.athos-login-form-small {
+  width: 100%;
+  max-width: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+.athos-input-new,
+.athos-input-small {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #333;
+  background-color: #18181c;
+  color: #fff;
+  border-radius: 5px;
+  font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.athos-input-new::placeholder,
+.athos-input-small::placeholder {
+  color: #888;
+}
+
+.athos-input-new:focus,
+.athos-input-small:focus {
+  border-color: #00a1ff;
+  outline: none;
+  box-shadow: 0 0 0 2.5px #00a1ff33;
+}
+
+.athos-btn-new,
+.athos-btn-small {
+  width: 100%;
+  padding: 9px 0;
+  background-color: #00a1ff;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 2px;
+  box-shadow: 0 0 8px #00a1ff55;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.athos-btn-new:hover,
+.athos-btn-small:hover {
+  background: #0081cc;
+}
+
+.athos-login-title {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 800;
+  text-align: center;
+  margin-bottom: 2px;
+  margin-top: 0;
+  letter-spacing: 0.5px;
+  font-family: inherit;
+}
+
+.athos-login-subtitle {
+  color: #00a1ff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 10px;
+  margin-top: 0;
+  letter-spacing: 0.2px;
+  font-family: inherit;
+}
+
+.athos-protected-label, .athos-protected-label-small {
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-align: center;
+  margin: 18px 0 12px 0;
+  letter-spacing: 1px;
+  font-family: inherit;
+} 

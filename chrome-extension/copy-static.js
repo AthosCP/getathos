@@ -7,6 +7,9 @@ const filesToCopy = [
   'public/icon32.png',
   'public/icon48.png',
   'public/icon128.png',
+  'public/logo.png',
+  'public/typo.png',
+  'public/icon.png',
   'popup.css'
 ];
 

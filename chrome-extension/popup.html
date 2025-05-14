@@ -7,21 +7,35 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="athos-header">
-    <img src="icon128.png" class="athos-logo" alt="Athos logo" />
-    <div class="athos-title">Athos Cybersecurity Platform</div>
+  <div class="athos-container">
+    <div class="athos-header">
+      <img src="logo.png" class="athos-logo" alt="Athos logo" />
+      <img src="typo.png" class="athos-typo" alt="Athos typo" />
+    </div>
+    
+    <form id="loginForm" class="athos-card">
+      <div class="input-group">
+        <input type="email" id="email" class="athos-input" placeholder="Correo electrónico" required>
+      </div>
+      <div class="input-group">
+        <input type="password" id="password" class="athos-input" placeholder="Contraseña" required>
+      </div>
+      <button type="submit" class="athos-btn">Iniciar protección</button>
+    </form>
+    
+    <div id="welcomeMessage" class="athos-card" style="display:none;">
+      <div class="athos-status">¡Bienvenido!</div>
+      <button id="logoutButton" class="athos-btn athos-logout-btn">Cerrar Sesión</button>
+    </div>
+    
+    <div id="errorMessage" class="athos-error" style="display:none;"></div>
+    <div id="policiesList" class="athos-card"></div>
   </div>
-  <form id="loginForm" class="athos-card">
-    <input type="email" id="email" class="athos-input" placeholder="Email" required>
-    <input type="password" id="password" class="athos-input" placeholder="Contraseña" required>
-    <button type="submit" class="athos-btn">Iniciar Sesión</button>
-  </form>
-  <div id="welcomeMessage" class="athos-card" style="display:none;">
-    <div class="athos-status">¡Bienvenido!</div>
-    <button id="logoutButton" class="athos-btn athos-logout">Cerrar Sesión</button>
-  </div>
-  <div id="errorMessage" class="athos-error" style="display:none;"></div>
-  <div id="policiesList" class="athos-card"></div>
+  
+  <footer class="athos-footer">
+    <p>&copy; 2023 Athos Cybersecurity</p>
+  </footer>
+  
   <script src="popup.js"></script>
 </body>
 </html> 

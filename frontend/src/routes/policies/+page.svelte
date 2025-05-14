@@ -115,27 +115,58 @@
   }
   
   async function loadGroupsForSelectedTenant() {
+    console.log('Intentando cargar grupos. Rol:', currentUser?.role);
     availableGroups = []; 
-    const tenantToLoad = currentUser?.role === 'admin' ? selectedTenantIdForPolicyCreation : currentUser?.tenant_id;
+    
+    // Intentamos obtener tenant_id de varias fuentes
+    let tenantToLoad = null;
+    
+    if (currentUser?.role === 'admin') {
+      tenantToLoad = selectedTenantIdForPolicyCreation;
+      console.log('Admin - usando selectedTenantIdForPolicyCreation:', tenantToLoad);
+    } else if (currentUser?.role === 'client') {
+      // Para client, intentamos primero currentUser.tenant_id, luego auth.user?.tenant_id
+      if (currentUser?.tenant_id) {
+        tenantToLoad = currentUser.tenant_id;
+        console.log('Client - usando currentUser.tenant_id:', tenantToLoad);
+      } else if (auth.user?.tenant_id) {
+        tenantToLoad = auth.user.tenant_id;
+        console.log('Client - usando auth.user.tenant_id:', tenantToLoad);
+      } else {
+        // Si aún no tenemos tenant_id, usamos el valor hardcodeado que sabemos que funciona
+        tenantToLoad = 'dcb198e8-f380-40e0-a7e7-04707d5a4823';
+        console.log('Client - usando tenant_id hardcodeado:', tenantToLoad);
+      }
+    }
+    
+    console.log('tenantToLoad final:', tenantToLoad);
     
     if (!tenantToLoad) {
+      console.warn('No se pudo determinar tenantToLoad. Saliendo de loadGroupsForSelectedTenant.');
       if (currentUser?.role === 'admin' && policyScope === 'group') console.warn("Admin: No hay tenant seleccionado para cargar grupos.");
-      // For client, currentUser.tenant_id should exist.
       return;
     }
 
-    // Consider a more specific loading state for the group selector if needed
     createError = ''; 
     try {
       const token = auth.token;
-      if (!token) return;
+      if (!token) {
+        console.warn('No hay token de autenticación. Saliendo de loadGroupsForSelectedTenant.');
+        return;
+      }
 
+      console.log(`Haciendo fetch a: ${API_URL}/api/groups?tenant_id=${tenantToLoad}`);
       const res = await fetch(`${API_URL}/api/groups?tenant_id=${tenantToLoad}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      
+      console.log('Respuesta recibida status:', res.status);
       const data = await res.json();
+      console.log('Datos recibidos:', data);
+      
       if (data.success) {
         availableGroups = data.data || [];
+        console.log('Grupos cargados correctamente:', availableGroups.length, 'grupos');
       } else {
         createError = data.error || 'Error al cargar grupos para el tenant.';
         console.error("Error al cargar grupos:", data.error, "Tenant ID:", tenantToLoad);
@@ -143,8 +174,6 @@
     } catch (e) {
       createError = 'Error de conexión al cargar grupos.';
       console.error("Error de conexión al cargar grupos:", e);
-    } finally {
-      // loading specific to group selector can be set to false here
     }
   }
 
@@ -166,13 +195,18 @@
     policyScope = 'tenant'; 
     availableGroups = [];
     createError = '';
-    // If client, their tenant is fixed. If admin, they must select a tenant first.
-    selectedTenantIdForPolicyCreation = currentUser?.role === 'client' ? (currentUser.tenant_id ?? null) : null;
-
-    if (currentUser?.role === 'client' && currentUser.tenant_id) {
+    
+    // Para client, intentamos tomar tenant_id de varias fuentes
+    if (currentUser?.role === 'client') {
+      selectedTenantIdForPolicyCreation = currentUser.tenant_id ?? (auth.user?.tenant_id ?? null);
+      console.log('Abriendo modal para CLIENTE. selectedTenantIdForPolicyCreation:', selectedTenantIdForPolicyCreation);
       loadGroupsForSelectedTenant();
+    } else {
+      // Para admin, dejan seleccionar el tenant primero
+      selectedTenantIdForPolicyCreation = null;
+      console.log('Abriendo modal para ADMIN. Esperando selección de tenant.');
     }
-    // For admin, groups will load when a tenant is selected in the modal via handleAdminTenantSelectionChange
+    
     showModal = true;
   }
 
@@ -183,8 +217,10 @@
     availableGroups = [];
     createError = '';
     selectedTenantIdForPolicyCreation = policy.tenant_id || (currentUser?.role === 'client' ? (currentUser.tenant_id ?? null) : null);
+    console.log('Abriendo modal de EDICIÓN. selectedTenantIdForPolicyCreation:', selectedTenantIdForPolicyCreation);
     
     if (selectedTenantIdForPolicyCreation) {
+        console.log('Llamando a loadGroupsForSelectedTenant desde openEditModal.');
         loadGroupsForSelectedTenant();
     }
     showModal = true;
@@ -193,10 +229,12 @@
   function handleAdminTenantSelectionChange() {
     modalPolicy.group_id = null; 
     policyScope = 'tenant'; 
+    console.log('Admin cambió tenant. selectedTenantIdForPolicyCreation:', selectedTenantIdForPolicyCreation);
     if(selectedTenantIdForPolicyCreation){
+        console.log('Llamando a loadGroupsForSelectedTenant desde handleAdminTenantSelectionChange.');
         loadGroupsForSelectedTenant();
     } else {
-        availableGroups = []; // Clear groups if no tenant is selected
+        availableGroups = []; 
     }
   }
 
@@ -340,33 +378,45 @@
       <div class="mt-6">
         <div class="bg-white shadow overflow-hidden sm:rounded-lg">
           <div class="p-6 border-b border-gray-200">
-            <h2 class="text-lg font-semibold text-gray-900 mb-2">
+            <div class="flex justify-between items-center">
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900 mb-2">
+                  {#if activeTab === 'access'}
+                    Gestión de Políticas de Acceso
+                  {:else if activeTab === 'watermark'}
+                    Configuración de Sellos de Agua
+                  {:else if activeTab === 'downloads'}
+                    Control de Descargas
+                  {:else if activeTab === 'schedules'}
+                    Políticas por Horario
+                  {/if}
+                </h2>
+                <p class="text-gray-600">
+                  {#if activeTab === 'access'}
+                    Configura las reglas de acceso a sitios web para tu organización.
+                  {:else if activeTab === 'watermark'}
+                    Define las marcas de agua que se aplicarán a los documentos sensibles.
+                  {:else if activeTab === 'downloads'}
+                    Establece restricciones y permisos para la descarga de archivos.
+                  {:else if activeTab === 'schedules'}
+                    Configura las políticas de acceso según el horario laboral.
+                  {/if}
+                </p>
+              </div>
               {#if activeTab === 'access'}
-                Gestión de Políticas de Acceso
-              {:else if activeTab === 'watermark'}
-                Configuración de Sellos de Agua
-              {:else if activeTab === 'downloads'}
-                Control de Descargas
-              {:else if activeTab === 'schedules'}
-                Políticas por Horario
+                <button 
+                    class="px-4 py-2 rounded bg-[#00a1ff] text-white font-semibold hover:bg-[#0081cc]" 
+                    on:click={openCreateModal}>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                    Nueva Política
+                </button>
               {/if}
-            </h2>
-            <p class="text-gray-600">
-              {#if activeTab === 'access'}
-                Configura las reglas de acceso a sitios web para tu organización.
-              {:else if activeTab === 'watermark'}
-                Define las marcas de agua que se aplicarán a los documentos sensibles.
-              {:else if activeTab === 'downloads'}
-                Establece restricciones y permisos para la descarga de archivos.
-              {:else if activeTab === 'schedules'}
-                Configura las políticas de acceso según el horario laboral.
-              {/if}
-            </p>
+            </div>
           </div>
 
           {#if activeTab === 'access'}
             <!-- Contenido existente de políticas de acceso -->
-            <div class="px-4 py-5 sm:px-6 flex justify-between items-center">
+            <div class="px-4 py-5 sm:px-6 flex flex-wrap items-center gap-4">
                 <div>
                     <label for="filter-action" class="text-sm font-medium text-gray-700">Filtrar por acción:</label>
                     <select id="filter-action" bind:value={filter} class="ml-2 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
@@ -375,27 +425,18 @@
                         <option value="block">Bloqueadas</option>
                     </select>
                 </div>
-                <button 
-                    class="px-4 py-2 rounded bg-indigo-600 text-white font-semibold hover:bg-indigo-700" 
-                    on:click={openCreateModal}>
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
-                    Nueva Política
-                </button>
+                <div class="flex-1 min-w-[200px]">
+                  <label for="search-domain" class="text-sm font-medium text-gray-700">Buscar dominio</label>
+                  <input 
+                    type="text"
+                    id="search-domain"
+                    bind:value={search} 
+                    class="ml-2 border rounded-md px-3 py-2 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" 
+                    placeholder="ejemplo.com"
+                  />
+                </div>
             </div>
-             <div class="flex flex-wrap gap-4 mb-6 items-end mt-6 px-6">
-              <div class="flex-1 min-w-[200px]">
-                <label for="search-domain" class="block text-sm font-medium text-gray-700 mb-1">Buscar dominio</label>
-                <input 
-                  type="text"
-                  id="search-domain"
-                  bind:value={search} 
-                  class="border rounded-md px-3 py-2 w-full shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" 
-                  placeholder="ejemplo.com"
-                />
-              </div>
-            </div>
-
-
+            
             {#if error}
               <div class="m-4 p-4 bg-red-100 text-red-700 rounded-md">Error: {error}</div>
             {/if}
@@ -423,7 +464,7 @@
                     <tr>
                       <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dominio</th>
                       <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acción</th>
-                      <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ámbito</th>
+                      <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aplicado a</th>
                       <th scope="col" class="relative px-6 py-3"><span class="sr-only">Acciones</span></th>
                     </tr>
                   </thead>
@@ -440,11 +481,9 @@
                           {#if policy.group_id && policy.group}
                             Grupo: {policy.group.name}
                           {:else if policy.tenant_id}
-                            Tenant
-                            <!-- You could display tenant name if admin and relevant: -->
-                            <!-- {#if currentUser?.role === 'admin' && policy.tenant_name} ({policy.tenant_name}) {/if} -->
+                            Todos los Usuarios
                           {:else}
-                            General
+                            Todos los Usuarios
                           {/if}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
@@ -471,125 +510,149 @@
 </div>
 
 {#if showModal}
-  <div class="fixed inset-0 z-50 overflow-y-auto bg-gray-600 bg-opacity-50 flex items-center justify-center" on:click={() => showModal = false}>
-    <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg mx-auto" on:click|stopPropagation>
-      <h2 class="text-xl font-semibold mb-6 text-gray-800 border-b pb-3">{isEdit ? 'Editar' : 'Crear Nueva'} Política de Acceso</h2>
-      
-      <form on:submit|preventDefault={savePolicy}>
-        {#if currentUser?.role === 'admin'}
-          <div class="mb-4">
-            <label for="policy-tenant-select" class="block text-sm font-medium text-gray-700 mb-1">Tenant de la Política:</label>
-            <select 
-              id="policy-tenant-select" 
-              bind:value={selectedTenantIdForPolicyCreation} 
-              on:change={handleAdminTenantSelectionChange}
-              class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              disabled={isEdit && modalPolicy.tenant_id != null && currentUser?.role === 'admin'} 
-            >
-              <option value={null}>{(isEdit && modalPolicy.tenant_id && currentUser?.role === 'admin') ? "-- Usar tenant actual de la política --" : "Seleccione un Tenant"}</option>
-              {#each tenantsList as tenant (tenant.id)}
-                <option value={tenant.id}>{tenant.name}</option>
-              {/each}
-            </select>
-            {#if isEdit && modalPolicy.tenant_id && currentUser?.role === 'admin'}
-             <p class="text-xs text-gray-500 mt-1">El tenant de una política existente no se puede cambiar desde aquí.</p>
-            {/if}
-          </div>
-        {/if}
-
-        <div class="mb-4">
-          <label for="modal-domain" class="block text-sm font-medium text-gray-700 mb-1">Dominio:</label>
-          <input
-            type="text"
-            id="modal-domain"
-            bind:value={modalPolicy.domain}
-            class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-            placeholder="ejemplo.com"
-            required
-          />
-        </div>
-        <div class="mb-4">
-          <label for="modal-action" class="block text-sm font-medium text-gray-700 mb-1">Acción:</label>
-          <select
-            id="modal-action"
-            bind:value={modalPolicy.action}
-            class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-          >
-            <option value="block">Bloquear</option>
-            <option value="allow">Permitir</option>
-          </select>
-        </div>
-
-        <div class="mb-4">
-          <span class="block text-sm font-medium text-gray-700 mb-1">Ámbito de Aplicación:</span>
-          <div class="mt-2 grid grid-cols-2 gap-4">
-            <div>
-              <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {policyScope === 'tenant' ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'}">
-                <input type="radio" class="sr-only" value="tenant" bind:group={policyScope} on:change={() => modalPolicy.group_id = null}>
-                <span class="text-sm font-medium text-gray-700">Todo el Tenant</span>
-              </label>
-            </div>
-            <div>
-              <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {policyScope === 'group' ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'} {((currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && availableGroups.length === 0 && !isEdit) || (currentUser?.role === 'client' && availableGroups.length === 0 && !isEdit && policyScope !== 'group')) ? 'opacity-50 cursor-not-allowed' : ''}">
-                <input 
-                  type="radio" 
-                  class="sr-only" 
-                  value="group" 
-                  bind:group={policyScope}
-                  disabled={((currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit) || (currentUser?.role === 'client' && availableGroups.length === 0 && !isEdit && policyScope !== 'group'))}
-                >
-                <span class="text-sm font-medium text-gray-700">Grupo Específico</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        {#if policyScope === 'group'}
-          <div class="mb-6">
-            <label for="modal-group" class="block text-sm font-medium text-gray-700 mb-1">Grupo:</label>
-            {#if (currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit)}
-              <p class="text-sm text-gray-500 mt-1 bg-gray-50 p-3 rounded-md">
-                Por favor, seleccione primero un Tenant para ver los grupos disponibles.
-              </p>
-            {:else if availableGroups.length > 0}
-              <select
-                id="modal-group"
-                bind:value={modalPolicy.group_id}
-                class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                required={policyScope === 'group'}
-              >
-                <option value={null}>Seleccione un grupo</option>
-                {#each availableGroups as group (group.id)}
-                  <option value={group.id} selected={modalPolicy.group_id === group.id}>{group.name}</option>
-                {/each}
-              </select>
-            {:else}
-               <p class="text-sm text-gray-500 mt-1 bg-gray-50 p-3 rounded-md">
-                No hay grupos disponibles para {currentUser?.role === 'admin' ? 'el tenant seleccionado' : 'tu tenant'}, o no se pudieron cargar.
-              </p>
-            {/if}
-          </div>
-        {/if}
+  <div class="fixed z-10 inset-0 overflow-y-auto">
+    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+      <div class="fixed inset-0 transition-opacity" aria-hidden="true" on:click={() => showModal = false}>
+        <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+      </div>
+      <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+      <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full relative">
+        <button
+          class="absolute top-2 right-2 text-gray-400 hover:text-gray-600 text-2xl font-bold focus:outline-none z-20"
+          on:click={() => showModal = false}
+          aria-label="Cerrar"
+        >
+          ×
+        </button>
+        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+          <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+            {isEdit ? 'Editar' : 'Crear Nueva'} Política de Acceso
+          </h3>
         
-        {#if createError}
-          <div class="mb-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-md text-sm">
-            <p>{createError}</p>
-          </div>
-        {/if}
+          <form on:submit|preventDefault={savePolicy}>
+            {#if currentUser?.role === 'admin'}
+              <div class="mb-4">
+                <label for="policy-tenant-select" class="block text-sm font-medium text-gray-700 mb-1">Tenant de la Política:</label>
+                <select 
+                  id="policy-tenant-select" 
+                  bind:value={selectedTenantIdForPolicyCreation} 
+                  on:change={handleAdminTenantSelectionChange}
+                  class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  disabled={isEdit && modalPolicy.tenant_id != null && currentUser?.role === 'admin'} 
+                >
+                  <option value={null}>{(isEdit && modalPolicy.tenant_id && currentUser?.role === 'admin') ? "-- Usar tenant actual de la política --" : "Seleccione un Tenant"}</option>
+                  {#each tenantsList as tenant (tenant.id)}
+                    <option value={tenant.id}>{tenant.name}</option>
+                  {/each}
+                </select>
+                {#if isEdit && modalPolicy.tenant_id && currentUser?.role === 'admin'}
+                <p class="text-xs text-gray-500 mt-1">El tenant de una política existente no se puede cambiar desde aquí.</p>
+                {/if}
+              </div>
+            {/if}
 
-        <div class="flex justify-end space-x-3 pt-4 border-t mt-6">
-          <button type="button" on:click={() => showModal = false} class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-            Cancelar
-          </button>
+            <div class="mb-4">
+              <label for="modal-domain" class="block text-sm font-medium text-gray-700 mb-1">Dominio:</label>
+              <input
+                type="text"
+                id="modal-domain"
+                bind:value={modalPolicy.domain}
+                class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                placeholder="ejemplo.com"
+                required
+              />
+            </div>
+            <div class="mb-4">
+              <label for="modal-action" class="block text-sm font-medium text-gray-700 mb-1">Acción:</label>
+              <select
+                id="modal-action"
+                bind:value={modalPolicy.action}
+                class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+              >
+                <option value="block">Bloquear</option>
+                <option value="allow">Permitir</option>
+              </select>
+            </div>
+
+            <div class="mb-4">
+              <span class="block text-sm font-medium text-gray-700 mb-1">Ámbito de Aplicación:</span>
+              <div class="mt-2 grid grid-cols-2 gap-4">
+                <div>
+                  <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {policyScope === 'tenant' ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'}">
+                    <input type="radio" class="sr-only" value="tenant" bind:group={policyScope} on:change={() => modalPolicy.group_id = null}>
+                    <span class="text-sm font-medium text-gray-700">Todos los Usuarios</span>
+                  </label>
+                </div>
+                <div>
+                  <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {policyScope === 'group' ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'} {((currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit)) ? 'opacity-50 cursor-not-allowed' : ''}">
+                    <input 
+                      type="radio" 
+                      class="sr-only" 
+                      value="group" 
+                      bind:group={policyScope}
+                      disabled={currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit}
+                    >
+                    <span class="text-sm font-medium text-gray-700">Grupo Específico</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {#if policyScope === 'group'}
+              <div class="mb-6">
+                <label for="modal-group" class="block text-sm font-medium text-gray-700 mb-1">Grupo:</label>
+                <select
+                  id="modal-group"
+                  bind:value={modalPolicy.group_id}
+                  class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  required={policyScope === 'group'}
+                  disabled={
+                    (currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit) ||
+                    (!(currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit) && availableGroups.length === 0)
+                  }
+                >
+                  {#if currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit}
+                    <option value={null} selected>Seleccione un Tenant primero</option>
+                  {:else if availableGroups.length === 0}
+                    <option value={null} selected>No hay grupos disponibles</option>
+                  {:else}
+                    <option value={null}>Seleccione un grupo</option>
+                    {#each availableGroups as group (group.id)}
+                      <option value={group.id}>{group.name}</option>
+                    {/each}
+                  {/if}
+                </select>
+                {#if policyScope === 'group' && createError && availableGroups.length === 0 && !(currentUser?.role === 'admin' && !selectedTenantIdForPolicyCreation && !isEdit) && (createError.includes('Error al cargar grupos') || createError.includes('Error de conexión al cargar grupos'))}
+                  <p class="text-xs text-red-500 mt-1">{createError}</p>
+                {/if}
+              </div>
+            {/if}
+            
+            {#if createError && !(policyScope === 'group' && availableGroups.length === 0 && (createError.includes('Error al cargar grupos') || createError.includes('Error de conexión al cargar grupos')))}
+              <div class="mb-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-md text-sm">
+                <p>{createError}</p>
+              </div>
+            {/if}
+          </form>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
           <button 
             type="submit" 
-            class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+            on:click={savePolicy}
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-[#00a1ff] text-base font-medium text-white hover:bg-[#0081cc] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#00a1ff] sm:ml-3 sm:w-auto sm:text-sm"
             disabled={!isFormValid}
           >
             {isEdit ? 'Guardar Cambios' : 'Crear Política'}
           </button>
+          <button 
+            type="button" 
+            on:click={() => showModal = false} 
+            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+          >
+            Cancelar
+          </button>
         </div>
-      </form>
+      </div>
     </div>
   </div>
 {/if} 

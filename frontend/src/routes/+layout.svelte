@@ -22,4 +22,9 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Athos</title>
+	<link rel="icon" href="/images/icon.png" />
+</svelte:head>
+
 {@render children()}
