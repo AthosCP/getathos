@@ -15,6 +15,24 @@ import hashlib
 # Cargar variables de entorno
 load_dotenv()
 
+# Cargar sitios prohibidos desde el archivo JSON
+def load_prohibited_sites():
+    try:
+        # Obtener la ruta absoluta del directorio actual
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, 'prohibidos.json')
+        print(f"DEBUG: Intentando cargar sitios prohibidos desde: {json_path}")
+        
+        with open(json_path, 'r', encoding='utf-8') as f:
+            sites = json.load(f)
+            print(f"DEBUG: Sitios prohibidos cargados exitosamente: {len(sites)} categorías")
+            return sites
+    except Exception as e:
+        print(f"Error cargando sitios prohibidos: {str(e)}")
+        return {}
+
+prohibited_sites = load_prohibited_sites()
+
 # Función para verificar una URL usando Google Web Risk API
 def check_url_with_webrisk(url):
     api_key = os.getenv('GOOGLE_WEBRISK_API_KEY')
@@ -36,6 +54,9 @@ def check_url_with_webrisk(url):
     except Exception as e:
         print(f"Error consultando Web Risk REST: {e}")
         return None
+
+def normalize_domain(domain):
+    return domain.replace('www.', '').lower().strip()
 
 app = Flask(__name__)
 # Configuración de JWT
@@ -76,6 +97,15 @@ CORS(app, supports_credentials=True, resources={
         "supports_credentials": True
     }
 })
+
+# Configurar headers de seguridad
+@app.after_request
+def add_security_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline';"
+    return response
 
 # Configuración de Supabase
 supabase: Client = create_client(
@@ -927,164 +957,79 @@ def get_navigation_logs():
 @jwt_required()
 def create_navigation_log():
     try:
-        # Obtener datos del JWT
-        claims = get_jwt()
-        user_id = claims.get('sub')
-        tenant_id = claims.get('tenant_id')
-        
-        # Obtener el token JWT para pasar a Supabase
-        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token)
-        
-        # Obtener datos del request
         data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Obtener datos del token JWT
+        jwt_token = get_jwt()
+        user_id = jwt_token.get('sub')
+        tenant_id = jwt_token.get('tenant_id')
+        email = jwt_token.get('email')
+        role = jwt_token.get('role')
+
+        # Obtener datos de la solicitud
         domain = data.get('domain')
         url = data.get('url')
-        timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
+        timestamp = data.get('timestamp')
         ip_address = data.get('ip_address')
-        
-        # Enriquecer con ciudad y país usando ipinfo.io
-        city = None
-        country = None
-        if ip_address:
-            try:
-                ipinfo_url = f'https://ipinfo.io/{ip_address}/json'
-                ipinfo_res = requests.get(ipinfo_url, timeout=2)
-                if ipinfo_res.status_code == 200:
-                    ipinfo_data = ipinfo_res.json()
-                    city = ipinfo_data.get('city')
-                    country = ipinfo_data.get('country')
-            except Exception as e:
-                print(f"Error consultando ipinfo.io: {e}")
-        
-        print(f"DEBUG: Recibido para navegación - domain: {domain}, url: {url}")
-        
-        # Verificar si el dominio está en la lista de prohibidos
-        action = 'visitado' # Acción por defecto
-        category_found = None
+        user_agent = data.get('user_agent')
+        tab_title = data.get('tab_title')
+        time_on_page = data.get('time_on_page', 0)
+        open_tabs_count = data.get('open_tabs_count', 0)
+        tab_focused = data.get('tab_focused', True)
+        event_type = data.get('event_type', 'navegacion')  # Valor por defecto
+        event_details = data.get('event_details', {})
+        risk_score = data.get('risk_score', 0)
+        city = data.get('city')
+        country = data.get('country')
+
+        print(f"DEBUG: Sitios prohibidos cargados: {prohibited_sites}")
+        print(f"DEBUG: Dominio recibido: {domain}")
+
+        # Normalizar dominio (ej. quitar www. y minúsculas)
+        def normalize_domain(domain):
+            normalized = domain.replace('www.', '').lower().strip() if domain else ''
+            print(f"DEBUG: Dominio normalizado: {normalized}")
+            return normalized
+
+        normalized_domain = normalize_domain(domain)
+
+        # Inicialización
+        action = 'visitado'
         policy_info = {}
+        block_reasons = []
+        category_found = None
 
-        # Normalizar dominio (ej. quitar www.)
-        normalized_domain = domain.replace('www.', '') if domain else ''
-
-        print('DEBUG: Chequeando lista prohibida...')
-        # PASO 1: Verificar en la lista local de sitios prohibidos
-        global prohibited_sites # Acceder a la variable global
-        # Asegurar que prohibited_sites esté cargado. Esto podría hacerse una vez al inicio de la app de forma más eficiente.
-        # Pero para asegurar que siempre esté disponible incluso en desarrollo con recarga, lo verificamos aquí.
-        if not prohibited_sites or not isinstance(prohibited_sites, dict):
-            print("DEBUG: `prohibited_sites` no está cargado o no es un dict. Intentando cargar...")
-            loaded_sites = {}
-            try:
-                script_dir_local = os.path.dirname(os.path.abspath(__file__))
-                file_path_local = os.path.join(script_dir_local, 'prohibidos.json')
-                with open(file_path_local, 'r', encoding='utf-8') as f_local:
-                    loaded_sites = json.load(f_local)
-                prohibited_sites = loaded_sites # Asignar a la variable global
-                print("Lista de sitios prohibidos cargada/recargada dinámicamente en create_navigation_log.")
-            except FileNotFoundError:
-                prohibited_sites = {} # Asegurar que sea un dict vacío si no se encuentra
-                print(f"Advertencia: prohibidos.json no encontrado en create_navigation_log. La verificación de categorías no funcionará.")
-            except json.JSONDecodeError:
-                prohibited_sites = {} # Asegurar que sea un dict vacío si hay error de JSON
-                print("Error: El archivo prohibidos.json no es un JSON válido (carga dinámica).")
-            except Exception as e_load:
-                prohibited_sites = {} # Fallback genérico
-                print(f"Error inesperado al cargar prohibidos.json: {e_load}")
-
+        # Chequeo de lista prohibida
         if isinstance(prohibited_sites, dict):
-            for category, domains_list in prohibited_sites.items(): 
+            for category, domains_list in prohibited_sites.items():
                 if category == 'recomendaciones':
                     continue
-                if isinstance(domains_list, list): # Asegurarse que domains_list es una lista
-                    normalized_list = [str(d).replace('www.', '') for d in domains_list]
+                if isinstance(domains_list, list):
+                    normalized_list = [normalize_domain(d) for d in domains_list]
+                    print(f"DEBUG: Comparando {normalized_domain} con lista de {category}: {normalized_list}")
                     if normalized_domain in normalized_list:
+                        print(f"DEBUG: ¡DOMINIO BLOQUEADO! {normalized_domain} encontrado en categoría {category}")
                         action = 'bloqueado'
+                        event_type = 'bloqueo'  # Cambiar el tipo de evento a bloqueo
                         category_found = category
-                        print(f"DEBUG: Dominio '{domain}' (normalizado: {normalized_domain}) encontrado en categoría prohibida: '{category_found}'")
-                        policy_info['block_reason'] = 'prohibited_list'
+                        block_reasons.append('prohibited_list')
                         policy_info['category'] = category_found
-                        break
-                else:
-                    print(f"DEBUG: Se esperaba una lista de dominios para la categoría '{category}', pero se encontró {type(domains_list)}")
-        else:
-            print("DEBUG: `prohibited_sites` no es un diccionario, se omite el chequeo de lista prohibida.")
+                        policy_info['block_reason'] = block_reasons
+                        event_details = {
+                            'reason': 'prohibited_list',
+                            'category': category,
+                            'time_on_page_details': {'is_periodic_update': False}
+                        }
+                        break  # Salir del bucle una vez encontrado
 
+        # Si hay algún motivo de bloqueo, asegúrate de que action sea 'bloqueado'
+        if block_reasons:
+            action = 'bloqueado'
+            print(f"DEBUG: Acción final: {action} por razones: {block_reasons}")
 
-        print('DEBUG: Chequeando políticas de la base de datos...')
-        # PASO 2: Si no fue bloqueado por la lista prohibida, verificar políticas de la BD
-        if action != 'bloqueado':
-            user_group_ids = []
-            if user_id: 
-                group_membership_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
-                if group_membership_res.data:
-                    user_group_ids = [str(gm['group_id']) for gm in group_membership_res.data]
-            
-            print(f"DEBUG: Usuario {user_id} pertenece a los grupos: {user_group_ids}")
-
-            potential_policies = []
-            
-            if user_group_ids:
-                group_policies_res = (user_supabase.table('policies')
-                    .select('id, action, domain, group_id, tenant_id')
-                    .eq('domain', domain)
-                    .in_('group_id', user_group_ids)
-                    .execute())
-                if group_policies_res.data:
-                    potential_policies.extend(group_policies_res.data)
-            
-            if tenant_id: 
-                tenant_policies_res = (user_supabase.table('policies')
-                    .select('id, action, domain, group_id, tenant_id')
-                    .eq('domain', domain)
-                    .eq('tenant_id', tenant_id)
-                    .is_('group_id', None)
-                    .is_('user_id', None) 
-                    .execute())
-                if tenant_policies_res.data:
-                    potential_policies.extend(tenant_policies_res.data)
-            
-            print(f"DEBUG: Políticas potenciales encontradas para el dominio '{domain}': {len(potential_policies)}")
-
-            final_policy_to_apply = None
-
-            group_block_policy = next((p for p in potential_policies if p.get('group_id') and p.get('action') == 'block'), None)
-            if group_block_policy:
-                final_policy_to_apply = group_block_policy
-                print(f"DEBUG: Aplicando política de GRUPO BLOCK: {final_policy_to_apply}")
-            
-            if not final_policy_to_apply:
-                group_allow_policy = next((p for p in potential_policies if p.get('group_id') and p.get('action') == 'allow'), None)
-                if group_allow_policy:
-                    final_policy_to_apply = group_allow_policy
-                    print(f"DEBUG: Aplicando política de GRUPO ALLOW: {final_policy_to_apply}")
-
-            if not final_policy_to_apply:
-                tenant_block_policy = next((p for p in potential_policies if not p.get('group_id') and p.get('action') == 'block'), None)
-                if tenant_block_policy:
-                    final_policy_to_apply = tenant_block_policy
-                    print(f"DEBUG: Aplicando política de TENANT BLOCK: {final_policy_to_apply}")
-
-            if not final_policy_to_apply:
-                tenant_allow_policy = next((p for p in potential_policies if not p.get('group_id') and p.get('action') == 'allow'), None)
-                if tenant_allow_policy:
-                    final_policy_to_apply = tenant_allow_policy
-                    print(f"DEBUG: Aplicando política de TENANT ALLOW: {final_policy_to_apply}")
-            
-            if final_policy_to_apply:
-                db_action = final_policy_to_apply.get('action')
-                if db_action == 'block':
-                    action = 'bloqueado'
-                    policy_info['policy_id'] = final_policy_to_apply.get('id')
-                    policy_info['block_reason'] = 'database_policy'
-                    policy_info['applied_policy_type'] = 'group' if final_policy_to_apply.get('group_id') else 'tenant'
-                    category_found = 'política' 
-                elif db_action == 'allow':
-                    action = 'permitido'
-                    policy_info['policy_id'] = final_policy_to_apply.get('id')
-                    policy_info['applied_policy_type'] = 'group' if final_policy_to_apply.get('group_id') else 'tenant'
-
-        # Insertar el registro en navigation_logs con todos los campos
+        # Construye el log_data con todos los campos requeridos
         log_data = {
             "user_id": user_id,
             "tenant_id": tenant_id,
@@ -1092,66 +1037,34 @@ def create_navigation_log():
             "url": url,
             "timestamp": timestamp,
             "action": action,
-            "policy_info": policy_info if policy_info else None,
+            "policy_info": policy_info,
             "ip_address": ip_address,
-            "user_agent": data.get('user_agent'),
-            "tab_title": data.get('tab_title'),
-            "time_on_page": data.get('time_on_page'),
-            "open_tabs_count": data.get('open_tabs_count'),
-            "tab_focused": data.get('tab_focused'),
-            "event_type": data.get('event_type'),
-            "event_details": data.get('event_details'),
-            "risk_score": data.get('risk_score'),
+            "user_agent": user_agent,
+            "tab_title": tab_title,
+            "time_on_page": time_on_page,
+            "open_tabs_count": open_tabs_count,
+            "tab_focused": tab_focused,
+            "event_type": event_type,  # Usar el event_type actualizado
+            "event_details": event_details,  # Usar los event_details actualizados
+            "risk_score": risk_score,
             "city": city,
             "country": country
         }
-        print(f"DEBUG: Datos de log a insertar: {log_data}")
-        new_log = user_supabase.table('navigation_logs').insert(log_data).execute()
 
-        # Actualizar alert_stats si fue bloqueado
-        if action == 'bloqueado' and tenant_id:
-            final_category = category_found or 'política'
-            print(f"DEBUG: Entrando a actualización de alert_stats para tenant {tenant_id}, categoría {final_category}")
+        print(f"DEBUG: Datos finales a guardar - action: {action}, event_type: {event_type}, policy_info: {policy_info}")
+
+        # Insertar en la base de datos
+        if supabase:
             try:
-                print(f"DEBUG: Buscando estadística existente para tenant {tenant_id} y categoría {final_category}")
-                existing_stat_query = user_supabase.table('alert_stats').select('id, count').eq('tenant_id', tenant_id).eq('category', final_category).maybe_single()
-                existing_stat_res = existing_stat_query.execute()
-                print(f"DEBUG: Resultado de búsqueda en alert_stats: {getattr(existing_stat_res, 'data', None)}")
-                
-                if existing_stat_res and getattr(existing_stat_res, 'data', None):
-                    stat_id = existing_stat_res.data['id']
-                    current_count = existing_stat_res.data['count']
-                    print(f"DEBUG: Actualizando contador existente: stat_id={stat_id}, current_count={current_count}")
-                    update_query = user_supabase.table('alert_stats').update({
-                        'count': current_count + 1, 
-                        'last_updated': datetime.utcnow().isoformat()
-                    }).eq('id', stat_id)
-                    update_result = update_query.execute()
-                    print(f"DEBUG: Resultado de actualización: {update_result.data}")
-                else:
-                    print(f"DEBUG: Insertando nueva estadística para tenant {tenant_id}, categoría {final_category}")
-                    insert_query = user_supabase.table('alert_stats').insert({
-                        'tenant_id': tenant_id, 
-                        'category': final_category, 
-                        'count': 1,
-                        'last_updated': datetime.utcnow().isoformat()
-                    })
-                    insert_result = insert_query.execute()
-                    print(f"DEBUG: Resultado de inserción: {insert_result.data}")
-            except Exception as stat_error:
-                print(f"DEBUG: Error actualizando estadísticas para {tenant_id}/{final_category}: {stat_error}")
-                print(f"DEBUG: Tipo de error: {type(stat_error)}")
-                import traceback
-                print(f"DEBUG: Stack trace: {traceback.format_exc()}")
+                result = supabase.table('navigation_logs').insert(log_data).execute()
+                return jsonify({"message": "Navigation log created successfully", "data": result.data}), 201
+            except Exception as e:
+                return jsonify({"error": f"Error creating navigation log: {str(e)}"}), 500
+        else:
+            return jsonify({"error": "Could not connect to database"}), 500
 
-        print(f"DEBUG: Acción determinada para la navegación: {action}")
-        return jsonify({"success": True, "data": new_log.data[0], "determined_action": action})
-        
     except Exception as e:
-        import traceback
-        print(f"DEBUG: Error en create_navigation_log: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
 @app.route('/api/navigation_logs/block', methods=['POST'])
 @jwt_required()

@@ -1,5 +1,5 @@
 interface UserInteractionEvent {
-  tipo_evento: 'click' | 'copy' | 'paste' | 'download' | 'file_upload';
+  tipo_evento: 'click' | 'copy' | 'paste' | 'download' | 'file_upload' | 'cut' | 'print';
   elemento_target: {
     tag: string;
     id?: string;
@@ -43,13 +43,15 @@ document.addEventListener('click', (e) => {
 // Listener para copiar
 document.addEventListener('copy', () => {
   const selection = window.getSelection();
+  const text = selection?.toString().substring(0, 100);
+  console.log('[Athos] Copiar:', text);
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
       tipo_evento: 'copy',
       elemento_target: {
         tag: 'selection',
-        text: selection?.toString().substring(0, 100)
+        text: text
       },
       timestamp: new Date().toISOString(),
       url_origen: window.location.href
@@ -60,11 +62,17 @@ document.addEventListener('copy', () => {
 // Listener para pegar
 document.addEventListener('paste', (e) => {
   const target = e.target as Element;
+  let pastedText = '';
+  if (e.clipboardData) {
+    pastedText = e.clipboardData.getData('text').substring(0, 100);
+  }
+  console.log('[Athos] Pegar:', pastedText, 'en', getElementInfo(target));
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
       tipo_evento: 'paste',
       elemento_target: getElementInfo(target),
+      pasted_text: pastedText,
       timestamp: new Date().toISOString(),
       url_origen: window.location.href
     }
@@ -107,6 +115,39 @@ document.addEventListener('change', (e) => {
       });
     });
   }
+});
+
+// Listener para cortar
+document.addEventListener('cut', () => {
+  const selection = window.getSelection();
+  const text = selection?.toString().substring(0, 100);
+  console.log('[Athos] Cortar:', text);
+  chrome.runtime.sendMessage({
+    type: 'user_interaction',
+    data: {
+      tipo_evento: 'cut',
+      elemento_target: {
+        tag: 'selection',
+        text: text
+      },
+      timestamp: new Date().toISOString(),
+      url_origen: window.location.href
+    }
+  });
+});
+
+// Listener para imprimir
+window.addEventListener('beforeprint', () => {
+  console.log('[Athos] Imprimir');
+  chrome.runtime.sendMessage({
+    type: 'user_interaction',
+    data: {
+      tipo_evento: 'print',
+      elemento_target: { tag: 'window' },
+      timestamp: new Date().toISOString(),
+      url_origen: window.location.href
+    }
+  });
 });
 
 // Mensaje de inicialización

@@ -1,7 +1,14 @@
 // Configuración de la URL base según el entorno
-export const API_URL = chrome.runtime.getManifest().version === '1.0.0'
-  ? 'https://api.getathos.com'
-  : 'http://localhost:5001';
+export const API_URL = (() => {
+  const manifest = chrome.runtime.getManifest();
+  const isDevelopment = manifest.version === '0.0.1';
+  const baseUrl = isDevelopment 
+    ? 'http://localhost:5001'
+    : 'https://api.getathos.com';
+  
+  console.log('API URL configurada:', baseUrl, '(Development:', isDevelopment, ')');
+  return baseUrl;
+})();
 
 interface Policy {
   domain: string;
@@ -27,7 +34,7 @@ interface NavigationEvent {
 }
 
 interface UserInteractionEvent {
-  tipo_evento: 'click' | 'copy' | 'paste' | 'download' | 'file_upload';
+  tipo_evento: 'click' | 'copy' | 'paste' | 'download' | 'file_upload' | 'cut' | 'print';
   elemento_target: {
     tag: string;
     id?: string;
@@ -68,21 +75,80 @@ enum PolicyAction {
 
 async function fetchPolicies(): Promise<void> {
   const { jwt_token } = await chrome.storage.local.get('jwt_token');
-  if (!jwt_token) return;
+  if (!jwt_token) {
+    console.log('No JWT token found, skipping policy fetch');
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'icon128.png',
+      title: 'Athos: Inicio de Sesión Requerido',
+      message: 'Por favor, inicia sesión para activar la protección',
+      priority: 2
+    });
+    return;
+  }
+
   try {
+    // Verificar si el servidor está disponible
+    const serverCheck = await fetch(`${API_URL}/health`, {
+      method: 'HEAD',
+      headers: {
+        'Authorization': `Bearer ${jwt_token}`
+      }
+    }).catch(() => null);
+
+    if (!serverCheck) {
+      throw new Error(`No se puede conectar al servidor en ${API_URL}. Verifica que el servidor esté corriendo.`);
+    }
+
+    console.log('Fetching policies from:', `${API_URL}/api/policies`);
     const res = await fetch(`${API_URL}/api/policies`, {
       headers: {
         'Authorization': `Bearer ${jwt_token}`,
         'Content-Type': 'application/json'
       }
     });
+    
+    if (!res.ok) {
+      if (res.status === 401) {
+        await chrome.storage.local.remove('jwt_token');
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon128.png',
+          title: 'Athos: Sesión Expirada',
+          message: 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.',
+          priority: 2
+        });
+        return;
+      }
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    
     const data = await res.json();
     if (data.success) {
       policies = data.data;
       await chrome.storage.local.set({ policies });
+      console.log('Policies updated successfully');
+    } else {
+      console.error('API returned unsuccessful response:', data);
     }
-  } catch (e) {
-    console.error('Error fetching policies:', e);
+  } catch (e: any) {
+    const errorMessage = e?.message || 'Unknown error';
+    console.error('Error fetching policies:', {
+      message: errorMessage,
+      stack: e?.stack,
+      url: `${API_URL}/api/policies`
+    });
+
+    // Notificar al usuario sobre el error de conexión
+    if (errorMessage.includes('No se puede conectar al servidor')) {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon128.png',
+        title: 'Athos: Error de Conexión',
+        message: 'No se puede conectar al servidor. Verifica tu conexión o contacta a soporte.',
+        priority: 2
+      });
+    }
   }
 }
 
@@ -92,7 +158,7 @@ async function registerNavigation(
   action: string = 'visitado',
   eventType: NavigationEvent['event_type'] = 'navegacion',
   eventDetails: Record<string, any> = {}
-): Promise<void> {
+): Promise<any> {
   const { jwt_token } = await chrome.storage.local.get('jwt_token');
   if (!jwt_token) return;
 
@@ -156,7 +222,7 @@ async function registerNavigation(
       risk_score: calculateRiskScore(eventType, eventDetails)
     };
 
-    await fetch(`${API_URL}/api/navigation_logs`, {
+    const response = await fetch(`${API_URL}/api/navigation_logs`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${jwt_token}`,
@@ -164,9 +230,11 @@ async function registerNavigation(
       },
       body: JSON.stringify(navigationEvent)
     });
+    return response.json();
 
   } catch (e) {
     console.error('Error registering navigation:', e);
+    return undefined;
   }
 }
 
@@ -272,7 +340,25 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
       priority: 2
     });
   } else {
-    await registerNavigation(url, 'visitado');
+    const logResponse = await registerNavigation(url, 'visitado');
+    if (
+      logResponse &&
+      logResponse.data &&
+      logResponse.data[0] &&
+      logResponse.data[0].action === 'bloqueado' &&
+      logResponse.data[0].policy_info &&
+      Array.isArray(logResponse.data[0].policy_info.block_reason) &&
+      logResponse.data[0].policy_info.block_reason.includes('prohibited_list')
+    ) {
+      redirectToBlocked(details.tabId, url);
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon128.png',
+        title: 'Sitio Bloqueado',
+        message: `El acceso a ${new URL(url).hostname} ha sido bloqueado por lista prohibida.`,
+        priority: 2
+      });
+    }
   }
 });
 
@@ -348,16 +434,33 @@ fetchPolicies();
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'user_interaction') {
     const event = message.data as UserInteractionEvent;
+    // Preparar event_details según el tipo de evento
+    const eventDetails: Record<string, any> = {
+      tipo_evento: event.tipo_evento,
+      elemento_target: event.elemento_target,
+      nombre_archivo: event.nombre_archivo,
+      timestamp: event.timestamp
+    };
+    if (event.tipo_evento === 'copy' && event.elemento_target?.text) {
+      eventDetails.texto_copiado = event.elemento_target.text;
+    }
+    if (event.tipo_evento === 'paste' && (event as any).pasted_text) {
+      eventDetails.texto_pegado = (event as any).pasted_text;
+    }
+    if (event.tipo_evento === 'cut' && event.elemento_target?.text) {
+      eventDetails.texto_cortado = event.elemento_target.text;
+    }
+    if (event.tipo_evento === 'print') {
+      eventDetails.accion = 'imprimir';
+    }
+    if (event.tipo_evento === 'download') {
+      eventDetails.nombre_archivo = event.nombre_archivo;
+    }
     registerNavigation(
       event.url_origen,
       'interaccion_usuario',
       'navegacion',
-      {
-        tipo_evento: event.tipo_evento,
-        elemento_target: event.elemento_target,
-        nombre_archivo: event.nombre_archivo,
-        timestamp: event.timestamp
-      }
+      eventDetails
     );
   } else if (message.type === 'user_logout') {
     const { url, timestamp } = message.data;
