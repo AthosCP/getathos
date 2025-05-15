@@ -299,26 +299,32 @@ def create_tenant():
 @app.route('/api/users', methods=['GET'])
 @jwt_required()
 def get_users():
-    claims = get_jwt()
-    role = claims.get('role')
-    tenant_id = claims.get('tenant_id')
-    jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    user_supabase = get_supabase_with_jwt(jwt_token)
+    try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
 
-    print(f"GET /api/users - Claims: {claims}")
+        print(f"GET /api/users - Claims: {claims}")
 
-    if role == 'admin':
-        # Admin global ve todos los usuarios (sujeto a RLS "Admin acceso total a users")
-        users_query = user_supabase.table('users').select('*')
-    elif role == 'client':
-        # Cliente ve solo usuarios de su tenant con rol 'user'
-        users_query = user_supabase.table('users').select('*').eq('tenant_id', tenant_id).eq('role', 'user')
-    else:
-        return jsonify({"error": "Rol no autorizado para ver usuarios"}), 403
-    
-    users = users_query.execute()
-    print(f"GET /api/users - Usuarios encontrados: {len(users.data)}")
-    return jsonify({"success": True, "data": users.data})
+        if role == 'admin':
+            # Admin global ve todos los usuarios (sujeto a RLS "Admin acceso total a users")
+            users_query = user_supabase.table('users').select('*')
+        elif role == 'client':
+            # Cliente ve solo usuarios de su tenant con rol 'user'
+            users_query = user_supabase.table('users').select('*').eq('tenant_id', tenant_id).eq('role', 'user')
+        else:
+            return jsonify({"error": "Rol no autorizado para ver usuarios"}), 403
+        
+        users = users_query.execute()
+        print(f"GET /api/users - Usuarios encontrados: {len(users.data)}")
+        return jsonify({"success": True, "data": users.data})
+    except Exception as e:
+        print(f"=== ERROR en admin_get_users ===")
+        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Mensaje de error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/users/<user_id>', methods=['GET'])
 @jwt_required()
@@ -343,31 +349,70 @@ def get_user(user_id):
     return jsonify({"success": True, "data": target_user})
 
 @app.route('/api/users', methods=['POST'])
+@jwt_required()
 def create_user():
     try:
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return jsonify({"error": "No token provided"}), 401
-
-        # Verificar el token y obtener el usuario
-        admin = supabase.auth.get_user(auth_header.split(' ')[1])
-        role = admin.user.user_metadata.get('role')
-        tenant_id = admin.user.user_metadata.get('tenant_id')
-
+        claims = get_jwt()
+        requesting_role = claims.get('role')
+        requesting_tenant_id = claims.get('tenant_id')
         data = request.get_json()
 
-        # Forzar tenant_id según el rol
-        if role == 'client':
-            data['tenant_id'] = tenant_id
-        # Si es admin global, puede crear en cualquier tenant (usa el que venga del frontend)
+        # Validar datos requeridos
+        if not data.get('email') or not data.get('password'):
+            return jsonify({"error": "Email y password son requeridos"}), 400
 
-        # Crear usuario en Supabase Auth
-        auth_response = supabase.auth.admin.create_user({
-            "email": data.get('email'),
-            "password": data.get('password'),
+        # Validar rol solicitado
+        requested_role = data.get('role', 'user')
+        if requested_role not in ['user', 'client', 'admin', 'athos_owner']:
+            return jsonify({"error": "Rol inválido"}), 400
+
+        # Validar permisos según rol del solicitante
+        if requesting_role == 'athos_owner':
+            # Athos owner puede crear cualquier rol
+            pass
+        elif requesting_role == 'admin':
+            # Admin puede crear users, clients y otros admins en su mismo tenant
+            if requested_role == 'athos_owner':
+                return jsonify({"error": "No autorizado para crear usuarios athos_owner"}), 403
+            # Asegurar que el nuevo admin pertenece al mismo tenant
+            data['tenant_id'] = requesting_tenant_id
+        elif requesting_role == 'client':
+            # Client solo puede crear users
+            if requested_role != 'user':
+                return jsonify({"error": "Solo puede crear usuarios con rol 'user'"}), 403
+            data['tenant_id'] = requesting_tenant_id
+        else:
+            return jsonify({"error": "No autorizado para crear usuarios"}), 403
+
+        # Validar tenant_id según el rol
+        if requesting_role == 'athos_owner':
+            # Athos owner puede crear sin tenant_id para roles admin y athos_owner
+            if requested_role in ['admin', 'athos_owner']:
+                data['tenant_id'] = None
+            elif not data.get('tenant_id'):
+                return jsonify({"error": "tenant_id es requerido"}), 400
+
+        # Obtener cliente autenticado
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Verificar límite de usuarios si aplica
+        if data.get('tenant_id'):
+            tenant = user_supabase.table('tenants').select('max_users').eq('id', data['tenant_id']).single().execute()
+            if not tenant.data:
+                return jsonify({"error": "Tenant no encontrado"}), 404
+            
+            current_users = user_supabase.table('users').select('id').eq('tenant_id', data['tenant_id']).execute()
+            if len(current_users.data) >= tenant.data['max_users']:
+                return jsonify({"error": f"Límite de usuarios alcanzado para este tenant"}), 400
+
+        # Crear usuario en Auth
+        auth_response = user_supabase.auth.admin.create_user({
+            "email": data['email'],
+            "password": data['password'],
             "email_confirm": True,
             "user_metadata": {
-                "role": data.get('role', 'user'),
+                "role": requested_role,
                 "tenant_id": data.get('tenant_id')
             }
         })
@@ -375,76 +420,131 @@ def create_user():
         # Crear usuario en la tabla users
         user_data = {
             "id": auth_response.user.id,
-            "email": data.get('email'),
-            "role": data.get('role', 'user'),
+            "email": data['email'],
+            "role": requested_role,
             "tenant_id": data.get('tenant_id'),
+            "status": "active",
+            "created_at": datetime.utcnow().isoformat()
         }
 
-        new_user = supabase.table('users').insert(user_data).execute()
+        new_user = user_supabase.table('users').insert(user_data).execute()
 
-        user = new_user.data[0]
-        user['tenant_name'] = supabase.table('tenants').select('name').eq('id', tenant_id).execute().data[0]['name'] if tenant_id else ''
-        # Actualizar el conteo de usuarios del tenant
-        supabase.table('tenants').update({
-            'users_count': len(supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
-        }).eq('id', tenant_id).execute()
+        if not new_user.data:
+            # Si falla la inserción, eliminar el usuario de Auth
+            user_supabase.auth.admin.delete_user(auth_response.user.id)
+            return jsonify({"error": "Error al crear usuario en la base de datos"}), 500
+
+        # Actualizar contador de usuarios del tenant
+        if data.get('tenant_id'):
+            user_supabase.rpc('increment_users_count', {'tenant_id': data['tenant_id']}).execute()
+
         return jsonify({
-            "success": True,
-            "data": user
-        })
+            "success": True, 
+            "data": new_user.data[0],
+            "message": f"Usuario {requested_role} creado exitosamente"
+        }), 201
+
     except Exception as e:
         print(f"Error en create_user: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 400
+        # Si se creó el usuario en Auth pero falló algo más, intentar limpiar
+        if 'auth_response' in locals():
+            try:
+                user_supabase.auth.admin.delete_user(auth_response.user.id)
+            except:
+                pass
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/users/<user_id>', methods=['PUT'])
+@jwt_required()
 def update_user(user_id):
     try:
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return jsonify({"error": "No token provided"}), 401
-
-        user = supabase.auth.get_user(auth_header.split(' ')[1])
-        role = user.user.user_metadata.get('role')
-        tenant_id = user.user.user_metadata.get('tenant_id')
-
+        claims = get_jwt()
+        requesting_role = claims.get('role')
+        requesting_tenant_id = claims.get('tenant_id')
         data = request.get_json()
 
-        # Solo admin puede editar cualquier usuario, client solo los de su tenant
-        user_data = supabase.table('users').select('*').eq('id', user_id).execute()
-        if not user_data.data:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-        target_user = user_data.data[0]
+        # Obtener cliente autenticado
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
 
-        if role == 'admin':
+        # Obtener usuario actual
+        current_user = user_supabase.table('users').select('*').eq('id', user_id).single().execute()
+        if not current_user.data:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        current_user_data = current_user.data
+        current_role = current_user_data.get('role')
+        current_tenant_id = current_user_data.get('tenant_id')
+
+        # Validar permisos según rol del solicitante
+        if requesting_role == 'athos_owner':
+            # Athos owner puede modificar cualquier usuario
             pass
-        elif role == 'client':
-            if target_user.get('tenant_id') != tenant_id:
-                return jsonify({"error": "No autorizado"}), 403
+        elif requesting_role == 'admin':
+            # Admin solo puede modificar usuarios de su mismo tenant
+            if str(current_tenant_id) != str(requesting_tenant_id):
+                return jsonify({"error": "No autorizado para modificar usuarios de otros tenants"}), 403
+            
+            # Validar cambio de rol
+            new_role = data.get('role')
+            if new_role and new_role != current_role:
+                if new_role == 'athos_owner':
+                    return jsonify({"error": "No autorizado para asignar rol athos_owner"}), 403
+                # Asegurar que el nuevo rol mantiene el mismo tenant
+                data['tenant_id'] = requesting_tenant_id
+        elif requesting_role == 'client':
+            # Client solo puede modificar usuarios de su mismo tenant
+            if str(current_tenant_id) != str(requesting_tenant_id):
+                return jsonify({"error": "No autorizado para modificar usuarios de otros tenants"}), 403
+            
+            # Client no puede cambiar roles
+            if 'role' in data:
+                return jsonify({"error": "No autorizado para cambiar roles"}), 403
         else:
-            return jsonify({"error": "No autorizado"}), 403
+            return jsonify({"error": "No autorizado para modificar usuarios"}), 403
+
+        # Preparar datos de actualización
+        update_data = {}
+        if 'email' in data:
+            update_data['email'] = data['email']
+        if 'role' in data:
+            update_data['role'] = data['role']
+        if 'tenant_id' in data:
+            update_data['tenant_id'] = data['tenant_id']
+        if 'status' in data:
+            update_data['status'] = data['status']
+
+        if not update_data:
+            return jsonify({"error": "No hay datos para actualizar"}), 400
 
         # Actualizar usuario en la tabla users
-        updated_user = supabase.table('users').update({
-            "role": data.get('role'),
-            "tenant_id": data.get('tenant_id')
-        }).eq('id', user_id).execute()
+        updated_user = user_supabase.table('users').update(update_data).eq('id', user_id).execute()
 
         if not updated_user.data:
-            return jsonify({"error": "Usuario no encontrado"}), 404
+            return jsonify({"error": "Error al actualizar usuario"}), 500
+
+        # Actualizar metadatos en Auth si cambió el rol o tenant_id
+        if 'role' in update_data or 'tenant_id' in update_data:
+            try:
+                user_supabase.auth.admin.update_user_by_id(user_id, {
+                    'user_metadata': {
+                        'role': update_data.get('role', current_role),
+                        'tenant_id': update_data.get('tenant_id', current_tenant_id)
+                    }
+                })
+            except Exception as e:
+                print(f"Error actualizando metadatos en Auth: {str(e)}")
+                # Continuar aunque falle la actualización de metadatos
 
         return jsonify({
             "success": True,
-            "data": updated_user.data[0]
+            "data": updated_user.data[0],
+            "message": "Usuario actualizado exitosamente"
         })
+
     except Exception as e:
         print(f"Error en update_user: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 400
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/users/<user_id>', methods=['DELETE'])
 def delete_user(user_id):
@@ -534,69 +634,57 @@ def register():
 @app.route('/api/policies', methods=['GET'])
 @jwt_required()
 def get_policies():
-    claims = get_jwt()
-    role = claims.get('role')
-    tenant_id = claims.get('tenant_id')
-    action = request.args.get('action')
-    group_id_filter = request.args.get('group_id') # Nuevo filtro
-    
-    print(f"GET /api/policies - JWT claims: {claims}")
-    print(f"Role: {role}, Tenant ID: {tenant_id}, Group ID Filter: {group_id_filter}")
-    
-    jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    user_supabase = get_supabase_with_jwt(jwt_token)
-    
-    query = user_supabase.table('policies').select('*, groups(name)') # Incluir nombre del grupo si existe
-    
-    if role == 'admin':
-        print("Usuario es admin, puede ver todas las políticas")
-        # Si admin filtra por un tenant_id específico desde el frontend
-        admin_tenant_filter = request.args.get('tenant_id')
-        if admin_tenant_filter:
-            try:
-                UUID(admin_tenant_filter, version=4)
-                query = query.eq('tenant_id', admin_tenant_filter)
-            except ValueError:
-                return jsonify({"error": "Formato de tenant_id inválido para el filtro de admin."}), 400
-    elif role in ['client', 'user']:
-        print(f"Usuario es {role}, filtrando por tenant_id: {tenant_id}")
-        query = query.eq('tenant_id', tenant_id)
-    else:
-        print(f"Rol no autorizado: {role}")
-        return jsonify({"error": "No autorizado"}), 403
-        
-    if action:
-        query = query.eq('action', action)
-    
-    if group_id_filter: # Aplicar filtro de group_id
-        try:
-            UUID(group_id_filter, version=4)
-            query = query.eq('group_id', group_id_filter)
-        except ValueError:
-            return jsonify({"error": "Formato de group_id inválido para el filtro."}), 400
-            
     try:
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        action = request.args.get('action')
+        group_id_filter = request.args.get('group_id') # Nuevo filtro
+        print(f"GET /api/policies - JWT claims: {claims}")
+        print(f"Role: {role}, Tenant ID: {tenant_id}, Group ID Filter: {group_id_filter}")
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        query = user_supabase.table('policies').select('*, groups(name)') # Incluir nombre del grupo si existe
+        if role == 'admin':
+            print("Usuario es admin, puede ver todas las políticas")
+            admin_tenant_filter = request.args.get('tenant_id')
+            if admin_tenant_filter:
+                try:
+                    UUID(admin_tenant_filter, version=4)
+                    query = query.eq('tenant_id', admin_tenant_filter)
+                except ValueError:
+                    return jsonify({"error": "Formato de tenant_id inválido para el filtro de admin."}), 400
+        elif role in ['client', 'user']:
+            print(f"Usuario es {role}, filtrando por tenant_id: {tenant_id}")
+            query = query.eq('tenant_id', tenant_id)
+        else:
+            print(f"Rol no autorizado: {role}")
+            return jsonify({"error": "No autorizado"}), 403
+        if action:
+            query = query.eq('action', action)
+        if group_id_filter:
+            try:
+                UUID(group_id_filter, version=4)
+                query = query.eq('group_id', group_id_filter)
+            except ValueError:
+                return jsonify({"error": "Formato de group_id inválido para el filtro."}), 400
         policies = query.order('created_at', desc=True).execute()
-        
-        # Procesar para renombrar groups a group y limpiar si no hay grupo
         processed_policies = []
         for policy_data in policies.data:
-            if policy_data.get('groups') is not None: # 'groups' es el nombre de la relación que Supabase usa
+            if policy_data.get('groups') is not None:
                 policy_data['group'] = policy_data.pop('groups')
-                if policy_data['group'] is None: # Si la FK group_id es NULL, 'groups' podría ser None
+                if policy_data['group'] is None:
                     del policy_data['group']
-            elif 'groups' in policy_data: # Asegurarse de eliminar 'groups' si es explícitamente None
-                 del policy_data['groups']
+            elif 'groups' in policy_data:
+                del policy_data['groups']
             processed_policies.append(policy_data)
-
         print(f"Políticas encontradas: {len(processed_policies)}")
         return jsonify({"success": True, "data": processed_policies})
     except Exception as e:
-        error_msg = str(e)
-        print(f"Error al obtener políticas: {error_msg}")
+        print(f"Error en get_policies: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({"error": error_msg}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/policies', methods=['POST'])
 @jwt_required()
@@ -1167,22 +1255,22 @@ def admin_get_clients():
     try:
         print("=== Iniciando admin_get_clients ===")
         claims = get_jwt()
+        admin_id = claims.get('sub')  # Obtener el ID del admin actual
         print(f"Claims del token: {claims}")
-        
+
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token) # Usar cliente con JWT
-        
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
         print("Intentando obtener clientes de Supabase...")
-        # Admin debe poder ver todos los tenants según la RLS "Permitir SELECT solo a admin"
-        tenants = user_supabase.table('tenants').select('*').execute().data 
+        # Filtrar por admin_id para obtener solo los clientes de este admin
+        tenants = user_supabase.table('tenants').select('*').eq('admin_id', admin_id).execute().data
         print(f"Clientes obtenidos exitosamente: {len(tenants)}")
-        
+
         return jsonify({"success": True, "data": tenants})
     except Exception as e:
         print(f"=== ERROR en admin_get_clients ===")
         print(f"Tipo de error: {type(e).__name__}")
         print(f"Mensaje de error: {str(e)}")
-        # print(f"Traceback completo:", exc_info=True) # Descomentar para traceback completo
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/admin/clients', methods=['POST'])
@@ -1191,11 +1279,23 @@ def admin_get_clients():
 def admin_create_client():
     try:
         data = request.get_json()
-        tenant = supabase.table('tenants').insert({
+        claims = get_jwt()
+        admin_id = claims.get('sub')  # El ID del admin que está creando el tenant
+
+        # Obtener el JWT y el cliente autenticado
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # Prints de depuración
+        print(f"admin_id a insertar: {admin_id} (type: {type(admin_id)})")
+        print(f"sub del JWT: {claims.get('sub')} (type: {type(claims.get('sub'))})")
+
+        tenant = user_supabase.table('tenants').insert({
             'name': data.get('name'),
             'description': data.get('description'),
             'max_users': data.get('max_users', 10),
             'status': 'active',
+            'admin_id': admin_id,  # Asignamos el admin_id
             'created_at': datetime.utcnow().isoformat()
         }).execute().data[0]
         return jsonify({"success": True, "data": tenant})
@@ -1236,21 +1336,26 @@ def admin_get_users():
         print("=== Iniciando admin_get_users ===")
         claims = get_jwt()
         print(f"Claims del token: {claims}")
-        
-        # Obtener el token JWT para pasar a Supabase
+        admin_id = claims.get('sub')
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
-        
-        print("Iniciando consulta a Supabase...")
-        users = user_supabase.table('users').select('*').execute()
-        print(f"Usuarios encontrados: {len(users.data)}")
-        
-        # Enriquecer con nombre del tenant
-        tenants = {t['id']: t['name'] for t in user_supabase.table('tenants').select('id,name').execute().data}
-        for u in users.data:
-            u['tenant_name'] = tenants.get(u.get('tenant_id'), '')
-            
-        return jsonify({"success": True, "data": users.data})
+
+        # 1. Obtener todos los tenants de este admin
+        tenants = user_supabase.table('tenants').select('id, name').eq('admin_id', admin_id).execute().data
+        tenant_ids = [t['id'] for t in tenants]
+        if not tenant_ids:
+            return jsonify({"success": True, "data": []})
+
+        # 2. Obtener los usuarios de esos tenants
+        users = user_supabase.table('users').select('*').in_('tenant_id', tenant_ids).execute().data
+
+        # 3. Enriquecer con el nombre del tenant
+        tenants_dict = {t['id']: t.get('name', '') for t in tenants}
+        for u in users:
+            u['tenant_name'] = tenants_dict.get(u.get('tenant_id'), '')
+
+        print(f"Usuarios encontrados: {len(users)}")
+        return jsonify({"success": True, "data": users})
     except Exception as e:
         print(f"=== ERROR en admin_get_users ===")
         print(f"Tipo de error: {type(e).__name__}")
@@ -1376,20 +1481,120 @@ def athos_create_admin():
         data = request.get_json()
         email = data.get('email')
         password = data.get('password')
-        auth_user = supabase.auth.admin.create_user({
-            'email': email,
-            'password': password,
-            'email_confirm': True,
-            'user_metadata': {'role': 'admin'}
-        })
-        user = supabase.table('users').insert({
-            'id': auth_user.user.id,
-            'email': email,
-            'role': 'admin',
-            'status': 'active',
-            'created_at': datetime.utcnow().isoformat()
-        }).execute().data[0]
-        return jsonify({"success": True, "data": user})
+        name = data.get('name', '')
+        max_clients = data.get('max_clients', 10)
+
+        if not email or not password:
+            return jsonify({"success": False, "error": "Email y password son requeridos"}), 400
+
+        # Obtener el JWT del usuario actual y el cliente Supabase autenticado
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # 1. Crear usuario admin en Auth
+        try:
+            auth_user = supabase.auth.admin.create_user({
+                'email': email,
+                'password': password,
+                'email_confirm': True,
+                'user_metadata': {'role': 'admin'}
+            })
+        except Exception as e:
+            if 'already registered' in str(e) or 'User already registered' in str(e) or 'duplicate key' in str(e):
+                return jsonify({"success": False, "error": "El email ya está registrado en Auth"}), 400
+            return jsonify({"success": False, "error": f"Error creando usuario en Auth: {str(e)}"}), 400
+
+        # 2. Insertar en la tabla users usando el cliente autenticado
+        try:
+            user = user_supabase.table('users').insert({
+                'id': auth_user.user.id,
+                'email': email,
+                'role': 'admin',
+                'status': 'active',
+                'created_at': datetime.utcnow().isoformat()
+            }).execute().data[0]
+        except Exception as e:
+            try:
+                supabase.auth.admin.delete_user(auth_user.user.id)
+            except Exception as del_e:
+                return jsonify({"success": False, "error": f"Error al crear usuario en la base de datos y al limpiar en Auth: {str(e)} / {str(del_e)}"}), 500
+            return jsonify({"success": False, "error": f"Error al crear usuario en la base de datos: {str(e)}"}), 500
+
+        # 3. Crear cliente Demo para este admin
+        try:
+            demo_tenant = user_supabase.table('tenants').insert({
+                'name': f'Demo {name or email}',
+                'description': 'Cliente Demo creado automáticamente',
+                'max_users': 10,
+                'status': 'active',
+                'admin_id': auth_user.user.id,
+                'created_at': datetime.utcnow().isoformat()
+            }).execute().data[0]
+        except Exception as e:
+            try:
+                user_supabase.table('users').delete().eq('id', auth_user.user.id).execute()
+                supabase.auth.admin.delete_user(auth_user.user.id)
+            except Exception as del_e:
+                return jsonify({"success": False, "error": f"Error al crear el cliente demo y al limpiar el admin: {str(e)} / {str(del_e)}"}), 500
+            return jsonify({"success": False, "error": f"Error al crear el cliente demo: {str(e)}"}), 500
+
+        # 4. Crear usuario client demo para el cliente Demo usando el cliente autenticado
+        try:
+            demo_client_email = f"cliente.{email}"
+            demo_client_auth = supabase.auth.admin.create_user({
+                'email': demo_client_email,
+                'password': '123',
+                'email_confirm': True,
+                'user_metadata': {'role': 'client', 'tenant_id': demo_tenant['id']}
+            })
+            demo_client_user = user_supabase.table('users').insert({
+                'id': demo_client_auth.user.id,
+                'email': demo_client_email,
+                'role': 'client',
+                'tenant_id': demo_tenant['id'],
+                'status': 'active',
+                'created_at': datetime.utcnow().isoformat()
+            }).execute().data[0]
+        except Exception as e:
+            # Limpiar todo si falla aquí
+            try:
+                user_supabase.table('users').delete().eq('id', auth_user.user.id).execute()
+                supabase.auth.admin.delete_user(auth_user.user.id)
+                user_supabase.table('tenants').delete().eq('id', demo_tenant['id']).execute()
+            except Exception as del_e:
+                return jsonify({"success": False, "error": f"Error al crear el usuario client demo y al limpiar todo: {str(e)} / {str(del_e)}"}), 500
+            return jsonify({"success": False, "error": f"Error al crear el usuario client demo: {str(e)}"}), 500
+
+        # 5. Crear usuario user demo para el cliente Demo usando el cliente autenticado
+        try:
+            demo_user_email = f"user.{email}"
+            demo_user_auth = supabase.auth.admin.create_user({
+                'email': demo_user_email,
+                'password': '123',
+                'email_confirm': True,
+                'user_metadata': {'role': 'user', 'tenant_id': demo_tenant['id']}
+            })
+            demo_user = user_supabase.table('users').insert({
+                'id': demo_user_auth.user.id,
+                'email': demo_user_email,
+                'role': 'user',
+                'tenant_id': demo_tenant['id'],
+                'status': 'active',
+                'created_at': datetime.utcnow().isoformat()
+            }).execute().data[0]
+        except Exception as e:
+            # Limpiar todo si falla aquí
+            try:
+                user_supabase.table('users').delete().eq('id', auth_user.user.id).execute()
+                user_supabase.table('users').delete().eq('id', demo_client_auth.user.id).execute()
+                supabase.auth.admin.delete_user(auth_user.user.id)
+                supabase.auth.admin.delete_user(demo_client_auth.user.id)
+                user_supabase.table('tenants').delete().eq('id', demo_tenant['id']).execute()
+            except Exception as del_e:
+                return jsonify({"success": False, "error": f"Error al crear el usuario user demo y al limpiar todo: {str(e)} / {str(del_e)}"}), 500
+            return jsonify({"success": False, "error": f"Error al crear el usuario user demo: {str(e)}"}), 500
+
+        return jsonify({"success": True, "admin": user, "demo_tenant": demo_tenant, "demo_client_user": demo_client_user, "demo_user": demo_user})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 

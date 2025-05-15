@@ -183,6 +183,39 @@
     }
   }
 
+  async function handleLogoEditUpload(file: File) {
+    logoUploading = true;
+    logoUploadError = '';
+    try {
+      if (!file || !selectedClient) return;
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext !== 'png' && ext !== 'svg') {
+        logoUploadError = 'Solo se permiten archivos PNG o SVG';
+        logoUploading = false;
+        return;
+      }
+      const fileName = `${crypto.randomUUID()}.${ext}`;
+      const { data, error } = await supabase.storage.from('logos').upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
+      if (error) {
+        logoUploadError = 'Error al subir el logo';
+        logoUploading = false;
+        return;
+      }
+      // Obtener URL pública
+      const { data: publicUrlData } = supabase.storage.from('logos').getPublicUrl(fileName);
+      if (publicUrlData?.publicUrl) {
+        selectedClient.logo_url = publicUrlData.publicUrl;
+      }
+    } catch (e) {
+      logoUploadError = 'Error inesperado al subir el logo';
+    } finally {
+      logoUploading = false;
+    }
+  }
+
   onMount(() => {
     const userRaw = localStorage.getItem('user');
     if (!userRaw) {
@@ -313,7 +346,12 @@
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700">Logo (PNG o SVG)</label>
-          <input type="file" accept=".png,.svg" on:change={(e) => handleLogoUpload(e.target.files[0])} class="mt-1 block w-full" />
+          <input type="file" accept=".png,.svg" on:change={(e) => {
+            const input = e.target as HTMLInputElement;
+            if (input?.files && input.files.length > 0) {
+              handleLogoUpload(input.files[0]);
+            }
+          }} class="mt-1 block w-full" />
           {#if logoUploading}
             <div class="text-blue-500 text-sm mt-1">Subiendo logo...</div>
           {/if}
@@ -369,7 +407,12 @@
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700">Logo (PNG o SVG)</label>
-          <input type="file" accept=".png,.svg" on:change={(e) => handleLogoEditUpload(e.target.files[0])} class="mt-1 block w-full" />
+          <input type="file" accept=".png,.svg" on:change={(e) => {
+            const input = e.target as HTMLInputElement;
+            if (input?.files && input.files.length > 0) {
+              handleLogoEditUpload(input.files[0]);
+            }
+          }} class="mt-1 block w-full" />
           {#if logoUploading}
             <div class="text-blue-500 text-sm mt-1">Subiendo logo...</div>
           {/if}

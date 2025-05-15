@@ -9,10 +9,19 @@
     role: string;
     max_clients?: number;
     password?: string;
+    tenant_id?: string;
   };
   type Cliente = {
     id?: string;
     admin_id?: string;
+  };
+
+  type Tenant = {
+    id?: string;
+    name: string;
+    description?: string;
+    max_users?: number;
+    status?: string;
   };
 
   let showCreateModal = false;
@@ -26,6 +35,7 @@
     password: '',
     max_clients: 10
   };
+
   let error = '';
   let loading = false;
 
@@ -83,31 +93,47 @@
     error = '';
   }
 
+  async function createTenant() {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/api/athos/clientes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(newTenant)
+      });
+      const data = await res.json();
+      if (data.success) {
+        return data.data.id;
+      } else {
+        error = data.error || 'Error al crear tenant';
+        return null;
+      }
+    } catch (e) {
+      error = 'Error de conexión';
+      return null;
+    }
+  }
+
   async function saveAdmin() {
     error = '';
     const token = localStorage.getItem('token');
     try {
-      let res, data;
-      if (editingAdmin) {
-        res = await fetch(`${API_URL}/api/athos/admins/${editingAdmin.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(newAdmin)
-        });
-      } else {
-        res = await fetch(`${API_URL}/api/athos/admins`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(newAdmin)
-        });
-      }
-      data = await res.json();
+      // Solo crear el admin, el backend se encarga del resto
+      const adminData = {
+        ...newAdmin
+      };
+      const res = await fetch(`${API_URL}/api/athos/admins`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(adminData)
+      });
+      const data = await res.json();
       if (data.success) {
         await fetchAdmins();
         resetModal();
@@ -205,18 +231,8 @@
       {/if}
       <div class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-700">Nombre</label>
-          <input type="text" bind:value={newAdmin.name} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700">Email</label>
+          <label class="block text-sm font-medium text-gray-700">Email del Admin</label>
           <input type="email" bind:value={newAdmin.email} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700">Rol</label>
-          <select bind:value={newAdmin.role} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-            <option value="admin">admin</option>
-          </select>
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700">Contraseña</label>
