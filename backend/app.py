@@ -1056,6 +1056,10 @@ def create_navigation_log():
         email = jwt_token.get('email')
         role = jwt_token.get('role')
 
+        # Obtener el cliente autenticado
+        auth_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(auth_token)
+
         # Obtener datos de la solicitud
         domain = data.get('domain')
         url = data.get('url')
@@ -1141,17 +1145,16 @@ def create_navigation_log():
 
         print(f"DEBUG: Datos finales a guardar - action: {action}, event_type: {event_type}, policy_info: {policy_info}")
 
-        # Insertar en la base de datos
-        if supabase:
-            try:
-                result = supabase.table('navigation_logs').insert(log_data).execute()
-                return jsonify({"message": "Navigation log created successfully", "data": result.data}), 201
-            except Exception as e:
-                return jsonify({"error": f"Error creating navigation log: {str(e)}"}), 500
-        else:
-            return jsonify({"error": "Could not connect to database"}), 500
+        # Insertar en la base de datos usando el cliente autenticado
+        try:
+            result = user_supabase.table('navigation_logs').insert(log_data).execute()
+            return jsonify({"message": "Navigation log created successfully", "data": result.data}), 201
+        except Exception as e:
+            print(f"Error al insertar log: {str(e)}")
+            return jsonify({"error": f"Error creating navigation log: {str(e)}"}), 500
 
     except Exception as e:
+        print(f"Error en create_navigation_log: {str(e)}")
         return jsonify({"error": f"Error processing request: {str(e)}"}), 500
 
 @app.route('/api/navigation_logs/block', methods=['POST'])
