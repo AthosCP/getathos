@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, afterUpdate } from 'svelte';
   import { goto } from '$app/navigation';
   import AdminNavbar from '$lib/AdminNavbar.svelte';
   import { API_URL } from '$lib/config';
+  import Chart from 'chart.js/auto';
 
   type Tenant = { 
     id: string; 
@@ -30,6 +31,8 @@
   };
   let loading = true;
   let error = '';
+  let chartInstance: Chart | null = null;
+  let chartCanvas: HTMLCanvasElement | null = null;
 
   async function loadDashboardData() {
     try {
@@ -58,6 +61,57 @@
     }
   }
 
+  function getMonthlyClientEvolution() {
+    // Agrupar clientes por mes de creación
+    const months: Record<string, number> = {};
+    stats.recent_clients.forEach(client => {
+      const date = new Date(client.created_at);
+      const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+      months[key] = (months[key] || 0) + 1;
+    });
+    // Ordenar por fecha
+    const sorted = Object.entries(months).sort(([a], [b]) => a.localeCompare(b));
+    let total = 0;
+    const labels = sorted.map(([k]) => k);
+    const data = sorted.map(([_, v]) => (total += v)); // Acumulado
+    return { labels, data };
+  }
+
+  function renderChart() {
+    if (!chartCanvas) return;
+    const { labels, data } = getMonthlyClientEvolution();
+    if (chartInstance) {
+      chartInstance.destroy();
+    }
+    chartInstance = new Chart(chartCanvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Clientes acumulados',
+          data,
+          borderColor: '#6366f1',
+          backgroundColor: 'rgba(99,102,241,0.1)',
+          tension: 0.3,
+          fill: true,
+          pointRadius: 4,
+          pointBackgroundColor: '#6366f1',
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          title: { display: false }
+        },
+        scales: {
+          x: { title: { display: true, text: 'Mes' } },
+          y: { title: { display: true, text: 'Clientes' }, beginAtZero: true, ticks: { stepSize: 1 } }
+        }
+      }
+    });
+  }
+
   onMount(() => {
     const userRaw = localStorage.getItem('user');
     if (!userRaw) {
@@ -71,19 +125,68 @@
     }
     loadDashboardData();
   });
+
+  afterUpdate(() => {
+    if (!loading && !error) {
+      renderChart();
+    }
+  });
 </script>
 
 <AdminNavbar active="dashboard" />
 
 <div class="min-h-screen bg-gray-100">
-  <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
     {#if loading}
       <div class="text-center">Cargando...</div>
     {:else if error}
       <div class="text-red-500 text-center">{error}</div>
     {:else}
+      <!-- Título de Bienvenida -->
+      <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">
+          Bienvenido a Athos Cybersecurity Platform
+        </h1>
+        <p class="mt-2 text-sm text-gray-600">
+          Panel de control para administrar tus clientes y monitorear el rendimiento
+        </p>
+      </div>
+
+      <!-- Comisiones y Ganancias -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <!-- Comisiones del Mes -->
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+          <div class="px-4 py-5 sm:p-6">
+            <dt class="text-sm font-medium text-gray-500 truncate">
+              Comisiones de este mes
+            </dt>
+            <dd class="mt-1 text-3xl font-semibold text-green-600">
+              $0.00
+            </dd>
+            <div class="mt-2 text-sm text-gray-500">
+              <span class="text-green-500">↑ 12%</span> vs mes anterior
+            </div>
+          </div>
+        </div>
+
+        <!-- Ganancias Totales -->
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+          <div class="px-4 py-5 sm:p-6">
+            <dt class="text-sm font-medium text-gray-500 truncate">
+              Ganancias totales
+            </dt>
+            <dd class="mt-1 text-3xl font-semibold text-green-600">
+              $0.00
+            </dd>
+            <div class="mt-2 text-sm text-gray-500">
+              Acumulado desde el inicio
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Métricas principales -->
-      <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Total Clientes -->
         <div class="bg-white overflow-hidden shadow rounded-lg">
           <div class="px-4 py-5 sm:p-6">
@@ -131,6 +234,12 @@
             </dd>
           </div>
         </div>
+      </div>
+
+      <!-- Gráfico de evolución de clientes -->
+      <div class="mt-8 bg-white shadow rounded-lg p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-2">Evolución de clientes</h2>
+        <canvas bind:this={chartCanvas} height="80"></canvas>
       </div>
 
       <!-- Clientes Recientes -->

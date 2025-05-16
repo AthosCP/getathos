@@ -152,142 +152,11 @@ async function fetchPolicies(): Promise<void> {
   }
 }
 
-// Registrar navegación en el backend
-async function registerNavigation(
-  url: string, 
-  action: string = 'visitado',
-  eventType: NavigationEvent['event_type'] = 'navegacion',
-  eventDetails: Record<string, any> = {}
-): Promise<any> {
-  const { jwt_token } = await chrome.storage.local.get('jwt_token');
-  if (!jwt_token) return;
-
-  try {
-    const hostname = new URL(url).hostname;
-    const tab = await chrome.tabs.get(await getCurrentTabId());
-    const tabId = tab.id;
-    if (!tabId) return;
-    
-    let timeOnPage = 0;
-    
-    // Manejar el tiempo en página según el tipo de evento
-    if (eventType === 'navegacion') {
-      if (action === 'visitado') {
-        // Nueva navegación: iniciar timer
-        const existingTimer = tabTimers.get(tabId);
-        if (existingTimer) {
-          clearTimeout(existingTimer.timer);
-        }
-        tabTimers.set(tabId, {
-          startTime: Date.now(),
-          timer: setTimeout(() => {
-            // Registrar tiempo en página cada 5 minutos
-            registerNavigation(url, 'tiempo_en_pagina', 'navegacion', { 
-              time_elapsed: 300,
-              is_periodic_update: true 
-            });
-          }, 5 * 60 * 1000)
-        });
-      } else if (action === 'tiempo_en_pagina') {
-        // Actualización periódica: usar el tiempo especificado
-        timeOnPage = eventDetails.time_elapsed || 300;
-      }
-    } else {
-      // Para otros eventos, calcular el tiempo desde el inicio
-      const timer = tabTimers.get(tabId);
-      if (timer) {
-        timeOnPage = Math.floor((Date.now() - timer.startTime) / 1000);
-      }
-    }
-
-    const navigationEvent: NavigationEvent = {
-      domain: hostname,
-      url: url,
-      action: action,
-      timestamp: new Date().toISOString(),
-      ip_address: await getPublicIP(),
-      user_agent: navigator.userAgent,
-      tab_title: tab.title || '',
-      time_on_page: timeOnPage,
-      open_tabs_count: await getOpenTabsCount(),
-      tab_focused: tab.active,
-      event_type: eventType,
-      event_details: {
-        ...eventDetails,
-        time_on_page_details: {
-          is_periodic_update: action === 'tiempo_en_pagina',
-          session_start: tabTimers.get(tabId)?.startTime
-        }
-      },
-      risk_score: calculateRiskScore(eventType, eventDetails)
-    };
-
-    const response = await fetch(`${API_URL}/api/navigation_logs`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${jwt_token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(navigationEvent)
-    });
-    return response.json();
-
-  } catch (e) {
-    console.error('Error registering navigation:', e);
-    return undefined;
-  }
-}
-
-// Calcular puntaje de riesgo (placeholder)
-function calculateRiskScore(eventType: string, details: Record<string, any>): number {
-  let score = 0;
-  
-  // Lógica básica de puntuación
-  switch (eventType) {
-    case 'formulario':
-      score += 20;
-      break;
-    case 'descarga':
-      score += 30;
-      break;
-    case 'bloqueo':
-      score += 50;
-      break;
-    case 'interaccion_usuario':
-      // Ajustar puntaje según tipo de interacción
-      switch (details.tipo_evento) {
-        case 'copy':
-        case 'paste':
-          score += 25; // Interacciones con contenido sensible
-          break;
-        case 'download':
-        case 'file_upload':
-          score += 35; // Interacciones con archivos
-          break;
-        case 'click':
-          score += 15; // Interacciones básicas
-          break;
-      }
-      break;
-    default:
-      score += 10;
-  }
-
-  // Ajustar según detalles específicos
-  if (details.sensitive_fields) {
-    score += 15;
-  }
-  if (details.file_type && ['exe', 'zip', 'rar'].includes(details.file_type)) {
-    score += 25;
-  }
-  if (details.nombre_archivo) {
-    const extension = details.nombre_archivo.split('.').pop()?.toLowerCase();
-    if (extension && ['exe', 'zip', 'rar', 'pdf', 'doc', 'docx'].includes(extension)) {
-      score += 20;
-    }
-  }
-
-  return Math.min(score, 100);
+// Función para calcular el tiempo en página
+async function calculateTimeOnPage(tabId: number): Promise<number> {
+  const timer = tabTimers.get(tabId);
+  if (!timer) return 0;
+  return Math.floor((Date.now() - timer.startTime) / 1000);
 }
 
 // Obtener ID de la pestaña actual
@@ -475,4 +344,148 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     );
   }
-}); 
+});
+
+async function registerNavigation(
+  url: string, 
+  action: string = 'visitado',
+  eventType: NavigationEvent['event_type'] = 'navegacion',
+  eventDetails: Record<string, any> = {}
+): Promise<any> {
+  const { jwt_token } = await chrome.storage.local.get('jwt_token');
+  
+  console.log('Intentando registrar navegación:', {
+    url,
+    action,
+    eventType,
+    hasToken: !!jwt_token,
+    apiUrl: API_URL
+  });
+
+  if (!jwt_token) {
+    console.error('No JWT token found for navigation registration');
+    return;
+  }
+
+  try {
+    const tab = await chrome.tabs.get(await getCurrentTabId());
+    const hostname = new URL(url).hostname;
+    const timeOnPage = await calculateTimeOnPage(tab.id || 0);
+
+    console.log('Preparando evento de navegación:', {
+      hostname,
+      timeOnPage,
+      tabTitle: tab.title,
+      tabActive: tab.active
+    });
+
+    const navigationEvent: NavigationEvent = {
+      domain: hostname,
+      url: url,
+      action: action,
+      timestamp: new Date().toISOString(),
+      ip_address: await getPublicIP(),
+      user_agent: navigator.userAgent,
+      tab_title: tab.title || '',
+      time_on_page: timeOnPage,
+      open_tabs_count: await getOpenTabsCount(),
+      tab_focused: tab.active,
+      event_type: eventType,
+      event_details: {
+        ...eventDetails,
+        time_on_page_details: {
+          is_periodic_update: action === 'tiempo_en_pagina',
+          session_start: tabTimers.get(tab.id || 0)?.startTime
+        }
+      },
+      risk_score: calculateRiskScore(eventType, eventDetails)
+    };
+
+    console.log('Enviando evento a la API:', {
+      endpoint: `${API_URL}/api/navigation_logs`,
+      eventType: navigationEvent.event_type,
+      timestamp: navigationEvent.timestamp
+    });
+
+    const response = await fetch(`${API_URL}/api/navigation_logs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwt_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(navigationEvent)
+    });
+
+    console.log('Respuesta de la API:', {
+      status: response.status,
+      ok: response.ok
+    });
+
+    const data = await response.json();
+    console.log('Datos de respuesta:', data);
+    return data;
+
+  } catch (error: unknown) {
+    console.error('Error detallado al registrar navegación:', {
+      error,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      url,
+      action,
+      eventType
+    });
+    return undefined;
+  }
+}
+
+// Calcular puntaje de riesgo
+function calculateRiskScore(eventType: string, details: Record<string, any>): number {
+  let score = 0;
+  
+  // Lógica básica de puntuación
+  switch (eventType) {
+    case 'formulario':
+      score += 20;
+      break;
+    case 'descarga':
+      score += 30;
+      break;
+    case 'bloqueo':
+      score += 50;
+      break;
+    case 'interaccion_usuario':
+      // Ajustar puntaje según tipo de interacción
+      switch (details.tipo_evento) {
+        case 'copy':
+        case 'paste':
+          score += 25; // Interacciones con contenido sensible
+          break;
+        case 'download':
+        case 'file_upload':
+          score += 35; // Interacciones con archivos
+          break;
+        case 'click':
+          score += 15; // Interacciones básicas
+          break;
+      }
+      break;
+    default:
+      score += 10;
+  }
+
+  // Ajustar según detalles específicos
+  if (details.sensitive_fields) {
+    score += 15;
+  }
+  if (details.file_type && ['exe', 'zip', 'rar'].includes(details.file_type)) {
+    score += 25;
+  }
+  if (details.nombre_archivo) {
+    const extension = details.nombre_archivo.split('.').pop()?.toLowerCase();
+    if (extension && ['exe', 'zip', 'rar', 'pdf', 'doc', 'docx'].includes(extension)) {
+      score += 20;
+    }
+  }
+
+  return Math.min(score, 100);
+} 

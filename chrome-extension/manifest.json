@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Athos Web Control",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Control de navegación web para organizaciones",
   "permissions": [
     "storage",

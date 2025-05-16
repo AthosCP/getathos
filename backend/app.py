@@ -547,18 +547,17 @@ def update_user(user_id):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/users/<user_id>', methods=['DELETE'])
+@jwt_required()
 def delete_user(user_id):
     try:
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return jsonify({"error": "No token provided"}), 401
-
-        user = supabase.auth.get_user(auth_header.split(' ')[1])
-        role = user.user.user_metadata.get('role')
-        tenant_id = user.user.user_metadata.get('tenant_id')
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
 
         # Solo admin puede eliminar cualquier usuario, client solo los de su tenant
-        user_data = supabase.table('users').select('*').eq('id', user_id).execute()
+        user_data = user_supabase.table('users').select('*').eq('id', user_id).execute()
         if not user_data.data:
             return jsonify({"error": "Usuario no encontrado"}), 404
         target_user = user_data.data[0]
@@ -573,16 +572,16 @@ def delete_user(user_id):
 
         # Primero eliminar de Supabase Auth
         try:
-            supabase.auth.admin.delete_user(user_id)
+            user_supabase.auth.admin.delete_user(user_id)
         except Exception as e:
             print(f"Error eliminando en Supabase Auth: {str(e)}")
             return jsonify({"success": False, "error": f"Error eliminando en Auth: {str(e)}"}), 400
 
         # Si fue exitoso, eliminar de la tabla users
-        supabase.table('users').delete().eq('id', user_id).execute()
+        user_supabase.table('users').delete().eq('id', user_id).execute()
         # Actualizar el conteo de usuarios del tenant
-        supabase.table('tenants').update({
-            'users_count': len(supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
+        user_supabase.table('tenants').update({
+            'users_count': len(user_supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
         }).eq('id', tenant_id).execute()
         return jsonify({
             "success": True,
@@ -1209,31 +1208,42 @@ def block_domain():
 def admin_dashboard():
     try:
         claims = get_jwt()
+        admin_id = claims.get('sub')  # Obtener el ID del admin actual
         print(f"ADMIN_DASHBOARD - Claims: {claims}")
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token) # Usar cliente con JWT
+        user_supabase = get_supabase_with_jwt(jwt_token)
 
-        # Total de clientes (tenants)
-        # Admin debe poder ver todos los tenants según la RLS "Permitir SELECT solo a admin"
-        tenants_res = user_supabase.table('tenants').select('id', count='exact').execute()
-        total_clients = tenants_res.count
+        # 1. Obtener todos los tenants de este admin
+        tenants = user_supabase.table('tenants').select('*').eq('admin_id', admin_id).execute().data
+        tenant_ids = [t['id'] for t in tenants]
         
-        # Total de usuarios
-        # Admin debe poder ver todos los usuarios según RLS "Admin acceso total a users"
-        users_res = user_supabase.table('users').select('id', count='exact').execute()
-        total_users = users_res.count
+        if not tenant_ids:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "total_clients": 0,
+                    "total_users": 0,
+                    "active_clients": 0,
+                    "active_users": 0,
+                    "recent_clients": []
+                }
+            })
+
+        # 2. Total de clientes (tenants) de este admin
+        total_clients = len(tenants)
         
-        # Clientes activos
-        active_clients_res = user_supabase.table('tenants').select('id', count='exact').eq('status', 'active').execute()
-        active_clients = active_clients_res.count
+        # 3. Total de usuarios de los tenants de este admin
+        users = user_supabase.table('users').select('id').in_('tenant_id', tenant_ids).execute().data
+        total_users = len(users)
         
-        # Usuarios activos
-        active_users_res = user_supabase.table('users').select('id', count='exact').eq('status', 'active').execute()
-        active_users = active_users_res.count
+        # 4. Clientes activos
+        active_clients = len([t for t in tenants if t['status'] == 'active'])
         
-        # Últimos 5 clientes
-        recent_clients_res = user_supabase.table('tenants').select('*').order('created_at', desc=True).limit(5).execute()
-        recent_clients = recent_clients_res.data
+        # 5. Usuarios activos
+        active_users = len([u for u in users if u.get('status') == 'active'])
+        
+        # 6. Últimos 5 clientes
+        recent_clients = sorted(tenants, key=lambda x: x['created_at'], reverse=True)[:5]
         
         print(f"ADMIN_DASHBOARD - total_clients: {total_clients}, total_users: {total_users}")
         return jsonify({
@@ -1375,24 +1385,33 @@ def admin_create_user():
         password = data.get('password')
         role = data.get('role', 'user')
         tenant_id = data.get('tenant_id')
+        
         if not tenant_id:
             return jsonify({"success": False, "error": "Debe seleccionar un cliente (tenant)"}), 400
+            
+        # Obtener el JWT y el cliente autenticado
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
         # Validar límite de usuarios
-        tenant = supabase.table('tenants').select('id, max_users').eq('id', tenant_id).execute().data
+        tenant = user_supabase.table('tenants').select('id, max_users').eq('id', tenant_id).execute().data
         if not tenant:
             return jsonify({"success": False, "error": "Cliente (tenant) no encontrado"}), 404
+            
         max_users = tenant[0].get('max_users', 0)
-        current_users = supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data
+        current_users = user_supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data
         if len(current_users) >= max_users:
             return jsonify({"success": False, "error": f"El cliente ha alcanzado el límite máximo de usuarios ({max_users})."}), 400
+            
         # Crear usuario en Supabase Auth y en la tabla users
-        auth_user = supabase.auth.admin.create_user({
+        auth_user = user_supabase.auth.admin.create_user({
             'email': email,
             'password': password,
             'email_confirm': True,
             'user_metadata': {'role': role, 'tenant_id': tenant_id}
         })
-        user = supabase.table('users').insert({
+        
+        user = user_supabase.table('users').insert({
             'id': auth_user.user.id,
             'email': email,
             'role': role,
@@ -1400,13 +1419,17 @@ def admin_create_user():
             'status': 'active',
             'created_at': datetime.utcnow().isoformat()
         }).execute().data[0]
-        user['tenant_name'] = supabase.table('tenants').select('name').eq('id', tenant_id).execute().data[0]['name'] if tenant_id else ''
+        
+        user['tenant_name'] = user_supabase.table('tenants').select('name').eq('id', tenant_id).execute().data[0]['name'] if tenant_id else ''
+        
         # Actualizar el conteo de usuarios del tenant
-        supabase.table('tenants').update({
-            'users_count': len(supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
+        user_supabase.table('tenants').update({
+            'users_count': len(user_supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
         }).eq('id', tenant_id).execute()
+        
         return jsonify({"success": True, "data": user})
     except Exception as e:
+        print(f"Error en admin_create_user: {str(e)}")
         return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/admin/users/<user_id>', methods=['PUT'])
@@ -1454,9 +1477,16 @@ def admin_delete_user(user_id):
         supabase.table('tenants').update({
             'users_count': len(supabase.table('users').select('id').eq('tenant_id', tenant_id).execute().data)
         }).eq('id', tenant_id).execute()
-        return jsonify({"success": True})
+        return jsonify({
+            "success": True,
+            "message": "Usuario eliminado correctamente"
+        })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        print(f"Error en delete_user: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
 # --- ENDPOINTS ATHOS OWNER: ADMINS ---
 @app.route('/api/athos/admins', methods=['GET'])

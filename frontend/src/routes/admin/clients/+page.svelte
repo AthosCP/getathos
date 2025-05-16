@@ -18,6 +18,8 @@
     accent_color: string;
     logo_url: string;
     owner_id: string;
+    commission?: number;
+    license_price?: number;
   };
 
   let clients: Client[] = [];
@@ -39,6 +41,10 @@
   let logoFile: File | null = null;
   let logoUploading = false;
   let logoUploadError = '';
+  let showCommissionModal = false;
+  let commissionClient: Client | null = null;
+  let tempCommission = 0;
+  let tempLicensePrice = 0;
 
   async function loadClients() {
     try {
@@ -216,6 +222,23 @@
     }
   }
 
+  function openCommissionModal(client: Client) {
+    commissionClient = client;
+    tempCommission = client.commission ?? 0;
+    tempLicensePrice = client.license_price ?? 0;
+    showCommissionModal = true;
+  }
+
+  function saveCommission() {
+    if (commissionClient) {
+      commissionClient.commission = tempCommission;
+      commissionClient.license_price = tempLicensePrice;
+      // Forzar refresco de la tabla
+      clients = clients.map(c => c.id === commissionClient?.id ? { ...c } : c);
+      showCommissionModal = false;
+    }
+  }
+
   onMount(() => {
     const userRaw = localStorage.getItem('user');
     if (!userRaw) {
@@ -262,6 +285,8 @@
                     <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Nombre</th>
                     <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Descripción</th>
                     <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Usuarios</th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Comisión (%)</th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Precio Licencia (USD, IVA incl.)</th>
                     <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Estado</th>
                     <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Acciones</th>
                   </tr>
@@ -276,6 +301,12 @@
                       <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                         {client.users_count} / {client.max_users}
                       </td>
+                      <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                        {client.commission ?? '-'}%
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                        {client.license_price ? `$${(client.license_price * 1.19).toFixed(2)}` : '-'}
+                      </td>
                       <td class="whitespace-nowrap px-3 py-4 text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {client.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
                           {client.status === 'active' ? 'Activo' : 'Pendiente'}
@@ -287,6 +318,12 @@
                           class="text-indigo-600 hover:text-indigo-900 mr-4"
                         >
                           Editar
+                        </button>
+                        <button
+                          on:click={() => openCommissionModal(client)}
+                          class="text-green-600 hover:text-green-900 mr-4"
+                        >
+                          Comisión
                         </button>
                         <button
                           on:click={() => deleteClient(client.id)}
@@ -376,6 +413,7 @@
   <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity z-40" on:click={() => { showEditModal = false; error = ''; }}></div>
   <!-- Modal -->
   <div class="fixed z-50 inset-0 flex items-center justify-center">
+    {#if selectedClient}
     <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 relative" on:click|stopPropagation>
       <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Editar Cliente</h3>
       <div class="space-y-4">
@@ -434,6 +472,33 @@
       <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse mt-6">
         <button type="button" on:click={updateClient} class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm">Guardar</button>
         <button type="button" on:click={() => { showEditModal = false; error = ''; }} class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
+      </div>
+    </div>
+    {/if}
+  </div>
+{/if}
+
+{#if showCommissionModal && commissionClient}
+  <!-- Overlay -->
+  <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity z-40" on:click={() => { showCommissionModal = false; }}></div>
+  <!-- Modal -->
+  <div class="fixed z-50 inset-0 flex items-center justify-center">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative" on:click|stopPropagation>
+      <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Editar Comisión y Precio de Licencia</h3>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700">Comisión (%)</label>
+          <input type="number" min="0" max="100" bind:value={tempCommission} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700">Precio de Licencia (USD, sin IVA)</label>
+          <input type="number" min="0" step="0.01" bind:value={tempLicensePrice} class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+          <div class="mt-1 text-xs text-gray-500">Con IVA (19%): <span class="font-semibold">${(tempLicensePrice * 1.19).toFixed(2)}</span> USD</div>
+        </div>
+      </div>
+      <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse mt-6">
+        <button type="button" on:click={saveCommission} class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:ml-3 sm:w-auto sm:text-sm">Guardar</button>
+        <button type="button" on:click={() => { showCommissionModal = false; }} class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancelar</button>
       </div>
     </div>
   </div>
