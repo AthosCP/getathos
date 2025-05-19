@@ -209,31 +209,24 @@ async function isBlocked(url: string): Promise<boolean> {
     const hostname = new URL(url).hostname;
     console.log(`[Athos] Verificando URL: ${url} (hostname: ${hostname})`);
     
-    // Primero verificamos si hay una política específica de grupo que bloquee
-    const groupBlockPolicy = policies.find(policy =>
-      (hostname === policy.domain || hostname.endsWith('.' + policy.domain)) &&
-      policy.action === PolicyAction.Block &&
-      policy.group_id !== null
-    );
-    
-    if (groupBlockPolicy) {
-      console.log(`[Athos] URL bloqueada por política de grupo: ${groupBlockPolicy.domain}`);
+    // Primero verificamos las políticas locales
+    const blockedPolicy = policies.find(policy => {
+      const policyDomain = policy.domain.toLowerCase();
+      const currentHostname = hostname.toLowerCase();
+      const matches = currentHostname === policyDomain || 
+                     currentHostname.endsWith('.' + policyDomain);
+      
+      if (matches && policy.action === PolicyAction.Block) {
+        console.log(`[Athos] URL bloqueada por política local: ${policyDomain}`);
+        return true;
+      }
+      return false;
+    });
+
+    if (blockedPolicy) {
+      console.log(`[Athos] URL bloqueada por política: ${blockedPolicy.domain}`);
       return true;
     }
-    
-    // Si no hay política de grupo que bloquee, verificamos las políticas generales
-    const generalBlockPolicy = policies.some(policy =>
-      (hostname === policy.domain || hostname.endsWith('.' + policy.domain)) &&
-      policy.action === PolicyAction.Block &&
-      policy.group_id === null
-    );
-
-    if (generalBlockPolicy) {
-      console.log(`[Athos] URL bloqueada por política general`);
-      return true;
-    }
-
-    console.log(`[Athos] No se encontraron políticas locales, consultando al backend...`);
 
     // Si no hay políticas locales que bloqueen, consultamos al backend
     const { jwt_token } = await chrome.storage.local.get('jwt_token');
@@ -262,8 +255,7 @@ async function isBlocked(url: string): Promise<boolean> {
 
     if (!data.success) {
       console.error(`[Athos] Error en la respuesta del backend:`, data.error);
-      // Si hay un error en el backend, por seguridad bloqueamos la URL
-      return true;
+      return true; // Por seguridad, bloqueamos si hay error
     }
 
     // Verificar si la URL está bloqueada por el backend
@@ -275,25 +267,19 @@ async function isBlocked(url: string): Promise<boolean> {
       return true;
     }
 
-    // Si hay un error al registrar el log pero la URL no está bloqueada, la permitimos
-    if (data.data.log_error) {
-      console.warn(`[Athos] Error al registrar log pero URL permitida:`, data.data.log_error);
-    }
-
     console.log(`[Athos] URL permitida por el backend`);
     return false;
   } catch (e) {
     console.error('[Athos] Error checking if URL is blocked:', e);
-    // Si hay un error, por seguridad bloqueamos la URL
-    return true;
+    return true; // Por seguridad, bloqueamos si hay error
   }
 }
 
 // Redirigir a blocked.html
 function redirectToBlocked(tabId: number, url: string) {
-  chrome.tabs.update(tabId, {
-    url: `blocked.html?url=${encodeURIComponent(url)}`
-  });
+  const blockedUrl = chrome.runtime.getURL(`blocked.html?url=${encodeURIComponent(url)}`);
+  console.log(`[Athos] Redirigiendo a página de bloqueo: ${blockedUrl}`);
+  chrome.tabs.update(tabId, { url: blockedUrl });
 }
 
 // Listener para navegación

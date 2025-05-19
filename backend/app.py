@@ -134,7 +134,33 @@ def check_url_with_webrisk(url):
         return False, str(e)
 
 def normalize_domain(domain):
-    return domain.replace('www.', '').lower().strip()
+    """
+    Normaliza un dominio o URL para extraer el dominio base.
+    Ejemplos:
+    - https://www.example.com -> example.com
+    - http://sub.example.com -> sub.example.com
+    - www.example.com -> example.com
+    - example.com -> example.com
+    """
+    try:
+        # Si es una URL completa, extraer el dominio
+        if '://' in domain:
+            domain = domain.split('://')[1]
+        
+        # Eliminar www. si existe
+        if domain.startswith('www.'):
+            domain = domain[4:]
+            
+        # Eliminar cualquier ruta o parámetros después del dominio
+        domain = domain.split('/')[0]
+        
+        # Eliminar cualquier puerto
+        domain = domain.split(':')[0]
+        
+        return domain.lower().strip()
+    except Exception as e:
+        print(f"[Backend] Error al normalizar dominio {domain}: {str(e)}")
+        return domain.lower().strip()
 
 app = Flask(__name__)
 # Configuración de JWT
@@ -1166,17 +1192,78 @@ def verify_policies(url):
     try:
         print(f"[Backend] Iniciando verificación de políticas para URL: {url}")
         domain = normalize_domain(url)
+        print(f"[Backend] Dominio normalizado: {domain}")
+        
         if not domain:
             return {'action': 'permitido', 'info': None}
             
-        # Por ahora, permitimos todas las URLs
+        # Obtener el token JWT
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not jwt_token:
+            print("[Backend] No se encontró token JWT")
+            return {'action': 'bloqueado', 'info': 'No autorizado'}
+            
+        # Obtener claims del token
+        claims = get_jwt()
+        tenant_id = claims.get('tenant_id')
+        
+        # Obtener conexión a Supabase
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        # 1. Verificar políticas específicas del tenant
+        tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).execute()
+        
+        # 2. Verificar políticas globales
+        global_policies = user_supabase.table('policies').select('*').is_('tenant_id', 'null').execute()
+        
+        # 3. Verificar lista global de sitios prohibidos
+        prohibited_sites = load_prohibited_sites()
+        print(f"[Backend] Lista de sitios prohibidos cargada: {prohibited_sites}")
+        
+        # Verificar en la categoría de apuestas/juegos de azar
+        if 'apuestas/juegos de azar' in prohibited_sites:
+            sites = prohibited_sites['apuestas/juegos de azar']
+            print(f"[Backend] Verificando en categoría 'apuestas/juegos de azar': {sites}")
+            if domain in sites:
+                print(f"[Backend] ¡DOMINIO ENCONTRADO EN LISTA PROHIBIDA! {domain}")
+                return {
+                    'action': 'bloqueado',
+                    'info': f'Dominio bloqueado por lista global (categoría: apuestas/juegos de azar)'
+                }
+        
+        # Verificar en todas las categorías
+        for category, sites in prohibited_sites.items():
+            print(f"[Backend] Verificando categoría: {category}")
+            print(f"[Backend] Sitios en categoría: {sites}")
+            if domain in sites:
+                print(f"[Backend] ¡DOMINIO ENCONTRADO EN LISTA PROHIBIDA! {domain}")
+                return {
+                    'action': 'bloqueado',
+                    'info': f'Dominio bloqueado por lista global (categoría: {category})'
+                }
+        
+        # Combinar políticas
+        all_policies = tenant_policies.data + global_policies.data
+        
+        # Verificar si el dominio está bloqueado por políticas
+        for policy in all_policies:
+            if policy['action'] == 'block' and domain.lower() in policy['domain'].lower():
+                print(f"[Backend] Dominio bloqueado por política: {policy['domain']}")
+                return {
+                    'action': 'bloqueado',
+                    'info': f'Dominio bloqueado por política: {policy["domain"]}'
+                }
+        
+        print(f"[Backend] Dominio permitido: {domain}")
         return {
             'action': 'permitido',
             'info': None
         }
     except Exception as e:
         print(f"[Backend] Error al verificar políticas: {str(e)}")
-        return {'action': 'permitido', 'info': None}
+        import traceback
+        traceback.print_exc()
+        return {'action': 'bloqueado', 'info': f'Error al verificar políticas: {str(e)}'}
 
 @app.route('/api/navigation_logs', methods=['POST'])
 @jwt_required()
@@ -1197,6 +1284,7 @@ def create_navigation_log():
             
         print(f"[Backend] Verificando políticas para dominio: {url}")
         result = verify_policies(url)
+        print(f"[Backend] Resultado de verify_policies: {result}")
         
         # Obtener claims del JWT
         claims = get_jwt()
@@ -1233,6 +1321,11 @@ def create_navigation_log():
         
         print(f"[Backend] Detalles del evento finales: {event_details}")
         
+        # Determinar acción y bloqueo según verify_policies
+        action = result.get('action', 'permitido')
+        blocked = action == 'bloqueado'
+        reason = result.get('info')
+        
         # Preparar los datos del log
         log_data = {
             'user_id': user_id,
@@ -1240,8 +1333,8 @@ def create_navigation_log():
             'domain': url,
             'url': url,
             'timestamp': data.get('timestamp', datetime.now(timezone.utc).isoformat()),
-            'action': 'permitido',
-            'policy_info': None,
+            'action': action,
+            'policy_info': reason,
             'ip_address': data.get('ip_address'),
             'user_agent': data.get('user_agent'),
             'tab_title': data.get('tab_title'),
@@ -1262,15 +1355,15 @@ def create_navigation_log():
         user_supabase = get_supabase_with_jwt(jwt_token)
         
         # Insertar en la base de datos
-        result = user_supabase.table('navigation_logs').insert(log_data).execute()
+        result_db = user_supabase.table('navigation_logs').insert(log_data).execute()
         
         # Preparar la respuesta
         response_data = {
             'success': True,
             'data': {
-                'action': 'permitido',
-                'blocked': False,
-                'reason': None,
+                'action': action,
+                'blocked': blocked,
+                'reason': reason,
                 'details': event_details,
                 'event_type': event_type
             }
@@ -3184,8 +3277,8 @@ def check_url_with_policies(url):
         try:
             prohibited_categories = load_prohibited_sites()
             # Verificar si el dominio está en alguna categoría prohibida
-            for category, domains in prohibited_categories.items():
-                if domain in domains:
+            for category, sites in prohibited_categories.items():
+                if domain in sites:
                     print(f"[Backend] Dominio encontrado en categoría prohibida: {category}")
                     return True, {
                         "reason": "prohibited_site",
