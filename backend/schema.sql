@@ -213,7 +213,7 @@ USING (
 
 -- Índices para mejorar el rendimiento
 CREATE INDEX IF NOT EXISTS idx_alert_stats_tenant_id ON alert_stats(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_alert_stats_category ON alert_stats(category);
+CREATE INDEX IF NOT EXISTS idx_alert_stats_category ON alert_stats(category); 
 
 -- Índices para mejorar el rendimiento
 CREATE INDEX IF NOT EXISTS idx_policies_tenant_id ON policies(tenant_id);

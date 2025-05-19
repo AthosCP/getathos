@@ -78,7 +78,7 @@ enum PolicyAction {
 async function fetchPolicies(): Promise<void> {
   const { jwt_token } = await chrome.storage.local.get('jwt_token');
   if (!jwt_token) {
-    console.log('No JWT token found, skipping policy fetch');
+    console.log('[Athos] No se encontró token JWT, omitiendo fetch de políticas');
     chrome.notifications.create({
       type: 'basic',
       iconUrl: 'icon128.png',
@@ -90,6 +90,8 @@ async function fetchPolicies(): Promise<void> {
   }
 
   try {
+    console.log('[Athos] Iniciando verificación de políticas...');
+    
     // Verificar si el servidor está disponible
     const serverCheck = await fetch(`${API_URL}/health`, {
       method: 'HEAD',
@@ -102,7 +104,7 @@ async function fetchPolicies(): Promise<void> {
       throw new Error(`No se puede conectar al servidor en ${API_URL}. Verifica que el servidor esté corriendo.`);
     }
 
-    console.log('Fetching policies from:', `${API_URL}/api/policies`);
+    console.log('[Athos] Servidor disponible, obteniendo políticas...');
     const res = await fetch(`${API_URL}/api/policies`, {
       headers: {
         'Authorization': `Bearer ${jwt_token}`,
@@ -112,6 +114,7 @@ async function fetchPolicies(): Promise<void> {
     
     if (!res.ok) {
       if (res.status === 401) {
+        console.log('[Athos] Token expirado o inválido');
         await chrome.storage.local.remove('jwt_token');
         chrome.notifications.create({
           type: 'basic',
@@ -122,23 +125,56 @@ async function fetchPolicies(): Promise<void> {
         });
         return;
       }
-      throw new Error(`HTTP error! status: ${res.status}`);
+      // Obtener el mensaje de error completo
+      const errorText = await res.text();
+      console.error('[Athos] Error completo del servidor:', {
+        status: res.status,
+        statusText: res.statusText,
+        errorText: errorText
+      });
+      throw new Error(`Error HTTP! status: ${res.status}, details: ${errorText}`);
     }
     
     const data = await res.json();
     if (data.success) {
       policies = data.data;
       await chrome.storage.local.set({ policies });
-      console.log('Policies updated successfully');
+      console.log('[Athos] Políticas actualizadas exitosamente:', {
+        total_policies: policies.length,
+        blocked_policies: policies.filter(p => p.action === 'block').length,
+        allowed_policies: policies.filter(p => p.action === 'allow').length
+      });
     } else {
-      console.error('API returned unsuccessful response:', data);
+      console.error('[Athos] API retornó respuesta no exitosa:', {
+        error: data.error,
+        message: data.message,
+        status: res.status,
+        details: data.details || 'No hay detalles adicionales'
+      });
+
+      // Notificar al usuario si hay un error de base de datos
+      if (data.error?.includes('relation') || data.error?.includes('table')) {
+        console.error('[Athos] Error de base de datos detectado:', {
+          error: data.error,
+          hint: data.hint,
+          details: data.details
+        });
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon128.png',
+          title: 'Athos: Error de Configuración',
+          message: 'Error al cargar políticas. Contacta al administrador del sistema.',
+          priority: 2
+        });
+      }
     }
   } catch (e: any) {
-    const errorMessage = e?.message || 'Unknown error';
-    console.error('Error fetching policies:', {
+    const errorMessage = e?.message || 'Error desconocido';
+    console.error('[Athos] Error al obtener políticas:', {
       message: errorMessage,
       stack: e?.stack,
-      url: `${API_URL}/api/policies`
+      url: `${API_URL}/api/policies`,
+      timestamp: new Date().toISOString()
     });
 
     // Notificar al usuario sobre el error de conexión
@@ -168,9 +204,10 @@ async function getCurrentTabId(): Promise<number> {
 }
 
 // Verificar si una URL debe ser bloqueada
-function isBlocked(url: string): boolean {
+async function isBlocked(url: string): Promise<boolean> {
   try {
     const hostname = new URL(url).hostname;
+    console.log(`[Athos] Verificando URL: ${url} (hostname: ${hostname})`);
     
     // Primero verificamos si hay una política específica de grupo que bloquee
     const groupBlockPolicy = policies.find(policy =>
@@ -180,18 +217,75 @@ function isBlocked(url: string): boolean {
     );
     
     if (groupBlockPolicy) {
+      console.log(`[Athos] URL bloqueada por política de grupo: ${groupBlockPolicy.domain}`);
       return true;
     }
     
     // Si no hay política de grupo que bloquee, verificamos las políticas generales
-    return policies.some(policy =>
+    const generalBlockPolicy = policies.some(policy =>
       (hostname === policy.domain || hostname.endsWith('.' + policy.domain)) &&
       policy.action === PolicyAction.Block &&
       policy.group_id === null
     );
-  } catch (e) {
-    console.error('Error checking if URL is blocked:', e);
+
+    if (generalBlockPolicy) {
+      console.log(`[Athos] URL bloqueada por política general`);
+      return true;
+    }
+
+    console.log(`[Athos] No se encontraron políticas locales, consultando al backend...`);
+
+    // Si no hay políticas locales que bloqueen, consultamos al backend
+    const { jwt_token } = await chrome.storage.local.get('jwt_token');
+    if (!jwt_token) {
+      console.log(`[Athos] No hay token JWT, no se puede consultar al backend`);
+      return false;
+    }
+
+    console.log(`[Athos] Enviando consulta al backend para verificar URL...`);
+    const response = await fetch(`${API_URL}/api/navigation_logs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwt_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: url,
+        action: 'visitado',
+        event_type: 'navegacion',
+        domain: hostname
+      })
+    });
+
+    const data = await response.json();
+    console.log(`[Athos] Respuesta completa del backend:`, JSON.stringify(data, null, 2));
+
+    if (!data.success) {
+      console.error(`[Athos] Error en la respuesta del backend:`, data.error);
+      // Si hay un error en el backend, por seguridad bloqueamos la URL
+      return true;
+    }
+
+    // Verificar si la URL está bloqueada por el backend
+    if (data.data.blocked === true) {
+      console.log(`[Athos] URL bloqueada por el backend:`, {
+        reason: data.data.reason,
+        details: data.data.details
+      });
+      return true;
+    }
+
+    // Si hay un error al registrar el log pero la URL no está bloqueada, la permitimos
+    if (data.data.log_error) {
+      console.warn(`[Athos] Error al registrar log pero URL permitida:`, data.data.log_error);
+    }
+
+    console.log(`[Athos] URL permitida por el backend`);
     return false;
+  } catch (e) {
+    console.error('[Athos] Error checking if URL is blocked:', e);
+    // Si hay un error, por seguridad bloqueamos la URL
+    return true;
   }
 }
 
@@ -208,42 +302,24 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   const url = details.url;
   if (!url.startsWith('http')) return;
 
-  if (isBlocked(url)) {
-    await registerNavigation(url, 'bloqueado', 'bloqueo', {
-      reason: 'policy_violation',
-      policy_details: policies.find(p => 
-        new URL(url).hostname === p.domain || 
-        new URL(url).hostname.endsWith('.' + p.domain)
-      )
-    });
-    redirectToBlocked(details.tabId, url);
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icon128.png',
-      title: 'Sitio Bloqueado',
-      message: `El acceso a ${new URL(url).hostname} ha sido bloqueado por políticas de la organización.`,
-      priority: 2
-    });
-  } else {
-    const logResponse = await registerNavigation(url, 'visitado');
-    if (
-      logResponse &&
-      logResponse.data &&
-      logResponse.data[0] &&
-      logResponse.data[0].action === 'bloqueado' &&
-      logResponse.data[0].policy_info &&
-      Array.isArray(logResponse.data[0].policy_info.block_reason) &&
-      logResponse.data[0].policy_info.block_reason.includes('prohibited_list')
-    ) {
+  try {
+    console.log(`[Athos] Verificando navegación a: ${url}`);
+    const isUrlBlocked = await isBlocked(url);
+    console.log(`[Athos] Resultado de verificación: ${isUrlBlocked ? 'BLOQUEADA' : 'PERMITIDA'}`);
+
+    if (isUrlBlocked) {
+      console.log(`[Athos] Redirigiendo a página de bloqueo...`);
       redirectToBlocked(details.tabId, url);
       chrome.notifications.create({
         type: 'basic',
         iconUrl: 'icon128.png',
         title: 'Sitio Bloqueado',
-        message: `El acceso a ${new URL(url).hostname} ha sido bloqueado por lista prohibida.`,
+        message: `El acceso a ${new URL(url).hostname} ha sido bloqueado por políticas de la organización.`,
         priority: 2
       });
     }
+  } catch (error) {
+    console.error('[Athos] Error en el listener de navegación:', error);
   }
 });
 
@@ -293,20 +369,38 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // Actualizar políticas al iniciar sesión o cuando cambie el token
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.jwt_token) {
-    fetchPolicies();
+    if (changes.jwt_token.newValue) {
+      console.log('[Athos] Token JWT actualizado, iniciando fetch de políticas');
+      fetchPolicies();
+    } else {
+      console.log('[Athos] Token JWT eliminado, limpiando políticas');
+      policies = [];
+    }
   }
 });
 
 // Inicializar el service worker
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Service Worker instalado');
-  fetchPolicies();
+chrome.runtime.onInstalled.addListener(async () => {
+    console.log('[Athos] Service Worker instalado');
+    const { jwt_token } = await chrome.storage.local.get('jwt_token');
+    if (jwt_token) {
+        console.log('[Athos] Token JWT encontrado, iniciando fetch de políticas');
+        await fetchPolicies();
+    } else {
+        console.log('[Athos] No hay sesión activa, esperando inicio de sesión');
+    }
 });
 
 // Verificar que el service worker está activo
-chrome.runtime.onStartup.addListener(() => {
-  console.log('Service Worker iniciado');
-  fetchPolicies();
+chrome.runtime.onStartup.addListener(async () => {
+    console.log('[Athos] Service Worker iniciado');
+    const { jwt_token } = await chrome.storage.local.get('jwt_token');
+    if (jwt_token) {
+        console.log('[Athos] Token JWT encontrado, iniciando fetch de políticas');
+        await fetchPolicies();
+    } else {
+        console.log('[Athos] No hay sesión activa, esperando inicio de sesión');
+    }
 });
 
 // Refrescar políticas cada 5 minutos
@@ -315,127 +409,122 @@ setInterval(fetchPolicies, 5 * 60 * 1000);
 // Inicializar políticas al cargar background
 fetchPolicies();
 
-// Escuchar mensajes del content script
+// Manejar mensajes del content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'user_interaction') {
-    const event = message.data;
-    registerNavigation(
-      event.url_origen,
-      'interaccion',
-      event.tipo_evento,
-      {
-        elemento_target: event.elemento_target,
-        texto: event.texto,
-        nombre_archivo: event.nombre_archivo
-      }
-    ).catch(error => {
-      console.error('Error al registrar interacción:', error);
-    });
-  } else if (message.type === 'user_logout') {
-    const { url, timestamp } = message.data;
-    registerNavigation(
-      url,
-      'logout_voluntario',
-      'navegacion',
-      {
-        tipo_evento: 'logout',
-        timestamp: timestamp,
-        detalles: 'Logout iniciado por el usuario'
-      }
-    );
-  }
+    console.log('[Athos] Mensaje recibido del content script:', message);
+    
+    if (message.type === 'user_interaction') {
+        const eventDetails = {
+            texto: message.texto,
+            tipo_evento: message.tipo_evento,
+            nombre_archivo: message.nombre_archivo,
+            elemento_target: message.elemento_target
+        };
+        
+        console.log('[Athos] Detalles del evento procesados:', eventDetails);
+        
+        registerNavigation({
+            url: message.url_origen,
+            action: 'visitado',
+            eventType: 'navegacion',
+            eventDetails: eventDetails,
+            timestamp: message.timestamp,
+            hasToken: true
+        });
+    } else if (message.type === 'user_logout') {
+        console.log('[Athos] Usuario ha cerrado sesión');
+        chrome.storage.local.remove(['jwt_token', 'policies'], () => {
+            console.log('[Athos] Datos de sesión limpiados');
+        });
+    }
 });
 
-async function registerNavigation(
-  url: string, 
-  action: string = 'visitado',
-  eventType: NavigationEvent['event_type'] = 'navegacion',
-  eventDetails: Record<string, any> = {}
-): Promise<any> {
-  const { jwt_token } = await chrome.storage.local.get('jwt_token');
-  
-  console.log('Intentando registrar navegación:', {
-    url,
-    action,
-    eventType,
-    hasToken: !!jwt_token,
-    apiUrl: API_URL
-  });
+// Función para obtener el token JWT
+async function getToken(): Promise<string | null> {
+    try {
+        const { jwt_token } = await chrome.storage.local.get('jwt_token');
+        return jwt_token || null;
+    } catch (error) {
+        console.error('[Athos] Error al obtener token:', error);
+        return null;
+    }
+}
 
-  if (!jwt_token) {
-    console.error('No JWT token found for navigation registration');
-    return;
-  }
-
-  try {
-    const tab = await chrome.tabs.get(await getCurrentTabId());
-    const hostname = new URL(url).hostname;
-    const timeOnPage = await calculateTimeOnPage(tab.id || 0);
-
-    console.log('Preparando evento de navegación:', {
-      hostname,
-      timeOnPage,
-      tabTitle: tab.title,
-      tabActive: tab.active
-    });
-
-    const navigationEvent: NavigationEvent = {
-      domain: hostname,
-      url: url,
-      action: action,
-      timestamp: new Date().toISOString(),
-      ip_address: await getPublicIP(),
-      user_agent: navigator.userAgent,
-      tab_title: tab.title || '',
-      time_on_page: timeOnPage,
-      open_tabs_count: await getOpenTabsCount(),
-      tab_focused: tab.active,
-      event_type: eventType,
-      event_details: {
-        ...eventDetails,
-        time_on_page_details: {
-          is_periodic_update: action === 'tiempo_en_pagina',
-          session_start: tabTimers.get(tab.id || 0)?.startTime
+async function registerNavigation(data: {
+    url: string;
+    action: string;
+    eventType: string;
+    eventDetails: any;
+    timestamp?: string;
+    hasToken?: boolean;
+}) {
+    try {
+        console.log('[Athos] Intentando registrar navegación:', data);
+        
+        if (!data.hasToken) {
+            console.log('[Athos] No hay token, omitiendo registro');
+            return;
         }
-      },
-      risk_score: calculateRiskScore(eventType, eventDetails)
-    };
 
-    console.log('Enviando evento a la API:', {
-      endpoint: `${API_URL}/api/navigation_logs`,
-      eventType: navigationEvent.event_type,
-      timestamp: navigationEvent.timestamp
-    });
+        const token = await getToken();
+        if (!token) {
+            console.log('[Athos] No se encontró token JWT');
+            return;
+        }
 
-    const response = await fetch(`${API_URL}/api/navigation_logs`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${jwt_token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(navigationEvent)
-    });
+        const eventData = {
+            url: data.url,
+            action: data.action,
+            event_type: data.eventType,
+            event_details: data.eventDetails,
+            timestamp: data.timestamp || new Date().toISOString(),
+            ip_address: null,
+            user_agent: navigator.userAgent,
+            tab_title: null,
+            time_on_page: 0,
+            open_tabs_count: 0,
+            tab_focused: true,
+            risk_score: 10
+        };
 
-    console.log('Respuesta de la API:', {
-      status: response.status,
-      ok: response.ok
-    });
+        console.log('[Athos] Enviando evento a la API:', {
+            endpoint: `${API_URL}/api/navigation_logs`,
+            eventType: data.eventType,
+            eventDetails: data.eventDetails,
+            timestamp: eventData.timestamp
+        });
 
-    const data = await response.json();
-    console.log('Datos de respuesta:', data);
-    return data;
+        const response = await fetch(`${API_URL}/api/navigation_logs`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(eventData)
+        });
 
-  } catch (error: unknown) {
-    console.error('Error detallado al registrar navegación:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      url,
-      action,
-      eventType
-    });
-    return undefined;
-  }
+        console.log('[Athos] Respuesta de la API:', {
+            status: response.status,
+            ok: response.ok,
+            statusText: response.statusText
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[Athos] Error detallado:', {
+                status: response.status,
+                statusText: response.statusText,
+                errorText: errorText
+            });
+            throw new Error(`Error al registrar navegación: ${response.status} - ${response.statusText}`);
+        }
+
+        const responseData = await response.json();
+        console.log('[Athos] Datos de respuesta:', responseData);
+
+    } catch (error) {
+        console.error('[Athos] Error al registrar navegación:', error);
+    }
 }
 
 // Calcular puntaje de riesgo

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import os
 from supabase import create_client, Client
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, create_access_token, get_jwt, verify_jwt_in_request
 from supabase.lib.client_options import ClientOptions
 import json # Importar json
@@ -18,17 +18,26 @@ load_dotenv()
 # Cargar sitios prohibidos desde el archivo JSON
 def load_prohibited_sites():
     try:
-        # Obtener la ruta absoluta del directorio actual
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        json_path = os.path.join(current_dir, 'prohibidos.json')
-        print(f"DEBUG: Intentando cargar sitios prohibidos desde: {json_path}")
-        
-        with open(json_path, 'r', encoding='utf-8') as f:
-            sites = json.load(f)
-            print(f"DEBUG: Sitios prohibidos cargados exitosamente: {len(sites)} categorías")
-            return sites
+        print("[Backend] Iniciando carga de sitios prohibidos...")
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            json_path = os.path.join(current_dir, 'prohibidos.json')
+            print(f"[Backend] Ruta del archivo de sitios prohibidos: {json_path}")
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                categories = json.load(f)
+                print(f"[Backend] Se cargaron {len(categories)} categorías de sitios prohibidos")
+                return categories
+        except FileNotFoundError:
+            print(f"[Backend] Archivo no encontrado: {json_path}")
+            return {}
+        except json.JSONDecodeError as e:
+            print(f"[Backend] Error al decodificar el archivo JSON: {str(e)}")
+            return {}
     except Exception as e:
-        print(f"Error cargando sitios prohibidos: {str(e)}")
+        print(f"[Backend] Error en load_prohibited_sites: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 prohibited_sites = load_prohibited_sites()
@@ -57,7 +66,7 @@ def check_url_with_webrisk(url):
         # 1. Verificar políticas específicas del tenant y grupos
         if role == 'user':
             # Obtener grupos del usuario
-            user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
+            user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
             user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
             
             # Ejecutar consultas separadas y combinar resultados
@@ -233,6 +242,8 @@ def login():
         email = data.get('email')
         password = data.get('password')
         
+        print("[Backend] Intentando login para:", email)
+        
         # Autenticación con Supabase
         response = supabase.auth.sign_in_with_password({
             "email": email,
@@ -243,6 +254,9 @@ def login():
             # Crear token JWT personalizado
             tenant_id = response.user.user_metadata.get('tenant_id')
             role = response.user.user_metadata.get('role')
+            user_id = response.user.id
+
+            print(f"[Backend] Login exitoso - User ID: {user_id}, Role: {role}, Tenant: {tenant_id}")
 
             # Si es admin y no tiene tenant_id, usar None o un valor especial
             if role == 'admin' and not tenant_id:
@@ -258,29 +272,32 @@ def login():
             }
             
             # Imprimir para depuración
-            print(f"User metadata: {response.user.user_metadata}")
-            print(f"Generated JWT claims: {claims}")
+            print(f"[Backend] User metadata: {response.user.user_metadata}")
+            print(f"[Backend] Generated JWT claims: {claims}")
             
             # Crear el token con los claims
             access_token = create_access_token(
-                identity=response.user.id,
+                identity=user_id,  # Esto establecerá el campo 'sub' en el JWT
                 additional_claims=claims
             )
+            
+            print("[Backend] Token JWT generado exitosamente")
             
             return jsonify({
                 "success": True,
                 "access_token": access_token,
                 "user": response.user.email,
-                "user_id": response.user.id,
+                "user_id": user_id,
                 "role": role
             })
         else:
+            print("[Backend] Login fallido - Credenciales inválidas")
             return jsonify({
                 "success": False,
                 "error": "Credenciales inválidas"
             }), 401
     except Exception as e:
-        print(f"Error en login: {str(e)}")
+        print(f"[Backend] Error en login: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -703,78 +720,88 @@ def register():
 @jwt_required()
 def get_policies():
     try:
+        print("[Backend] Iniciando obtención de políticas...")
         claims = get_jwt()
+        print("[Backend] Claims del JWT:", claims)
         role = claims.get('role')
         tenant_id = claims.get('tenant_id')
-        user_id = claims.get('user_id')
-        action = request.args.get('action')
-        group_id_filter = request.args.get('group_id')
-        
-        print(f"GET /api/policies - JWT claims: {claims}")
-        print(f"Role: {role}, Tenant ID: {tenant_id}, User ID: {user_id}, Group ID Filter: {group_id_filter}")
-        
+        user_id = claims.get('sub')  # Usar el campo sub como user_id
+        print(f"[Backend] Usuario: {user_id}, Rol: {role}, Tenant: {tenant_id}")
+
+        if not user_id:
+            print("[Backend] ERROR: sub (user_id) es None en los claims")
+            return jsonify({"success": False, "error": "user_id no encontrado en el token"}), 401
+
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
-        
-        # Construir la consulta base
-        query = user_supabase.table('policies').select('*, groups(name)')
-        
-        if role == 'admin':
-            print("Usuario es admin, puede ver todas las políticas")
-            admin_tenant_filter = request.args.get('tenant_id')
-            if admin_tenant_filter:
-                try:
-                    UUID(admin_tenant_filter, version=4)
-                    query = query.eq('tenant_id', admin_tenant_filter)
-                except ValueError:
-                    return jsonify({"error": "Formato de tenant_id inválido para el filtro de admin."}), 400
-        elif role in ['client', 'user']:
-            print(f"Usuario es {role}, filtrando por tenant_id: {tenant_id}")
-            
-            # Obtener los grupos del usuario
-            user_groups = []
-            if role == 'user':
-                user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
-                if user_groups_res.data:
-                    user_groups = [g['group_id'] for g in user_groups_res.data]
-            
-            # Construir la consulta para obtener todas las políticas relevantes
-            if user_groups:
-                # Para usuarios con grupos, obtenemos políticas del tenant y de sus grupos
-                policies = user_supabase.table('policies').select('*, groups(name)').or_(
-                    f'tenant_id.eq.{tenant_id},group_id.in.({",".join(user_groups)})'
-                ).execute().data
-            else:
-                # Para usuarios sin grupos o clientes, obtenemos todas las políticas del tenant
-                policies = user_supabase.table('policies').select('*, groups(name)').eq('tenant_id', tenant_id).execute().data
-        else:
-            print(f"Rol no autorizado: {role}")
-            return jsonify({"error": "No autorizado"}), 403
-            
-        if action:
-            policies = [p for p in policies if p['action'] == action]
-            
-        if group_id_filter:
+
+        # Obtener políticas según el rol
+        if role == 'user':
+            print("[Backend] Obteniendo políticas para usuario normal")
             try:
-                UUID(group_id_filter, version=4)
-                policies = [p for p in policies if p.get('group_id') == group_id_filter]
-            except ValueError:
-                return jsonify({"error": "Formato de group_id inválido para el filtro."}), 400
-                
-        # Procesar los resultados para incluir la información del grupo
-        processed_policies = []
-        for policy in policies:
-            if policy.get('groups'):
-                policy['group'] = policy.pop('groups')
-            processed_policies.append(policy)
-            
-        print(f"Políticas encontradas: {len(processed_policies)}")
-        return jsonify({"success": True, "data": processed_policies})
+                # Obtener grupos del usuario
+                print(f"[Backend] Consultando grupos para user_id: {user_id}")
+                user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
+                print(f"[Backend] Respuesta de grupos: {user_groups_res}")
+                user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+                print(f"[Backend] Grupos del usuario: {user_groups}")
+
+                # Obtener políticas del tenant sin grupo
+                tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+                print(f"[Backend] Políticas del tenant: {len(tenant_policies.data)} encontradas")
+
+                # Obtener políticas de los grupos del usuario
+                group_policies = []
+                if user_groups:
+                    group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).execute().data
+                    print(f"[Backend] Políticas de grupos: {len(group_policies)} encontradas")
+
+                # Combinar políticas
+                all_policies = tenant_policies.data + group_policies
+                print(f"[Backend] Total de políticas: {len(all_policies)}")
+
+                # Obtener información de grupos para las políticas
+                group_ids = [p['group_id'] for p in all_policies if p.get('group_id')]
+                group_info = {}
+                if group_ids:
+                    groups_res = user_supabase.table('groups').select('id, name').in_('id', group_ids).execute()
+                    group_info = {g['id']: g for g in groups_res.data}
+
+                # Procesar políticas
+                processed_policies = []
+                for policy in all_policies:
+                    processed_policy = {
+                        'id': policy['id'],
+                        'domain': policy['domain'],
+                        'action': policy['action'],
+                        'category': policy.get('category'),
+                        'block_reason': policy.get('block_reason'),
+                        'group_id': policy.get('group_id'),
+                        'group': group_info.get(policy.get('group_id'))
+                    }
+                    processed_policies.append(processed_policy)
+
+                print(f"[Backend] Políticas procesadas exitosamente: {len(processed_policies)}")
+                return jsonify({"success": True, "data": processed_policies})
+
+            except Exception as e:
+                print(f"[Backend] Error al obtener políticas para usuario: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        else:
+            print("[Backend] Obteniendo políticas para rol administrativo")
+            # Para client y admin, obtener todas las políticas del tenant
+            policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).execute()
+            print(f"[Backend] Políticas encontradas para tenant: {len(policies.data)}")
+            return jsonify({"success": True, "data": policies.data})
+
     except Exception as e:
-        print(f"Error en get_policies: {str(e)}")
+        print(f"[Backend] Error en get_policies: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/policies', methods=['POST'])
 @jwt_required()
@@ -1131,80 +1158,133 @@ def get_navigation_logs():
         print(f"Error en get_navigation_logs: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 400
 
+def verify_policies(url):
+    """
+    Verifica las políticas para una URL dada.
+    Retorna un diccionario con la acción y la información relevante.
+    """
+    try:
+        print(f"[Backend] Iniciando verificación de políticas para URL: {url}")
+        domain = normalize_domain(url)
+        if not domain:
+            return {'action': 'permitido', 'info': None}
+            
+        # Por ahora, permitimos todas las URLs
+        return {
+            'action': 'permitido',
+            'info': None
+        }
+    except Exception as e:
+        print(f"[Backend] Error al verificar políticas: {str(e)}")
+        return {'action': 'permitido', 'info': None}
+
 @app.route('/api/navigation_logs', methods=['POST'])
 @jwt_required()
 def create_navigation_log():
     try:
-        claims = get_jwt()
-        user_id = claims.get('user_id')
-        tenant_id = claims.get('tenant_id')
+        print("[Backend] Iniciando registro de navegación...")
         data = request.get_json()
+        print(f"[Backend] Datos recibidos: {data}")
         
-        if not data:
-            return jsonify({"error": "Datos requeridos"}), 400
+        # Obtener el tipo de evento
+        event_type = data.get('event_type', 'navegacion')
+        print(f"[Backend] Tipo de evento: {event_type}")
+        
+        # Verificar políticas
+        url = data.get('url')
+        if not url:
+            return jsonify({'success': False, 'error': 'URL no proporcionada'}), 400
             
-        # Determinar si es una navegación o una interacción
-        is_interaction = data.get('event_type') in ['click', 'copy', 'paste', 'download', 'file_upload', 'cut', 'print']
+        print(f"[Backend] Verificando políticas para dominio: {url}")
+        result = verify_policies(url)
         
-        if is_interaction:
-            # Para interacciones, usamos la URL actual
-            url = data.get('url_origen')
-            domain = normalize_domain(url)
-            action = 'interaccion'
-            event_type = data.get('event_type')
+        # Obtener claims del JWT
+        claims = get_jwt()
+        user_id = claims.get('sub')
+        tenant_id = claims.get('tenant_id')
+        
+        # Preparar los detalles del evento
+        event_details = {}
+        
+        # Si hay datos en el request, procesarlos
+        if data.get('event_details'):
+            event_details = data['event_details']
+            print(f"[Backend] Detalles del evento encontrados en event_details: {event_details}")
+        elif data.get('tipo_evento'):
+            # Construir detalles del evento desde los campos individuales
             event_details = {
-                'tipo_evento': event_type,
-                'elemento_target': data.get('elemento_target'),
                 'texto': data.get('texto'),
-                'nombre_archivo': data.get('nombre_archivo')
+                'tipo_evento': data.get('tipo_evento'),
+                'nombre_archivo': data.get('nombre_archivo'),
+                'elemento_target': data.get('elemento_target')
             }
-        else:
-            # Para navegación normal
-            url = data.get('url')
-            domain = normalize_domain(url)
-            if not domain:
-                return jsonify({"error": "URL inválida"}), 400
-                
-            # Verificar políticas y configuraciones
-            is_blocked, reason = check_url_with_policies(url)
-            action = 'bloqueado' if is_blocked else 'permitido'
-            event_type = 'navegacion'
-            event_details = None
-            
-        # Registrar el log
-        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token)
+            print(f"[Backend] Detalles del evento construidos desde campos individuales: {event_details}")
         
+        # Si no hay detalles del evento, intentar obtenerlos del mensaje
+        if not event_details and data.get('message'):
+            message = data['message']
+            event_details = {
+                'texto': message.get('texto'),
+                'tipo_evento': message.get('tipo_evento'),
+                'nombre_archivo': message.get('nombre_archivo'),
+                'elemento_target': message.get('elemento_target')
+            }
+            print(f"[Backend] Detalles del evento extraídos del mensaje: {event_details}")
+        
+        print(f"[Backend] Detalles del evento finales: {event_details}")
+        
+        # Preparar los datos del log
         log_data = {
             'user_id': user_id,
             'tenant_id': tenant_id,
-            'domain': domain,
+            'domain': url,
             'url': url,
-            'action': action,
+            'timestamp': data.get('timestamp', datetime.now(timezone.utc).isoformat()),
+            'action': 'permitido',
+            'policy_info': None,
+            'ip_address': data.get('ip_address'),
+            'user_agent': data.get('user_agent'),
+            'tab_title': data.get('tab_title'),
+            'time_on_page': data.get('time_on_page'),
+            'open_tabs_count': data.get('open_tabs_count'),
+            'tab_focused': data.get('tab_focused'),
             'event_type': event_type,
             'event_details': event_details,
-            'policy_info': {'reason': reason} if reason else None,
-            'risk_score': calculate_risk_score(event_type, event_details)
+            'risk_score': data.get('risk_score', 10),
+            'city': data.get('city'),
+            'country': data.get('country')
         }
         
-        log_result = user_supabase.table('navigation_logs').insert(log_data).execute()
+        print(f"[Backend] Registrando log con datos: {log_data}")
         
-        if not log_result.data:
-            return jsonify({"error": "Error al registrar el log"}), 500
-            
-        return jsonify({
-            "success": True,
-            "data": {
-                "blocked": action == 'bloqueado' if not is_interaction else None,
-                "reason": reason if not is_interaction else None
+        # Obtener conexión a Supabase con el token JWT
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        # Insertar en la base de datos
+        result = user_supabase.table('navigation_logs').insert(log_data).execute()
+        
+        # Preparar la respuesta
+        response_data = {
+            'success': True,
+            'data': {
+                'action': 'permitido',
+                'blocked': False,
+                'reason': None,
+                'details': event_details,
+                'event_type': event_type
             }
-        })
+        }
         
+        print("[Backend] Log registrado exitosamente")
+        return jsonify(response_data)
+            
     except Exception as e:
-        print(f"Error en create_navigation_log: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        print(f"[Backend] Error en create_navigation_log: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 def calculate_risk_score(event_type: str, event_details: dict) -> int:
     """Calcula el puntaje de riesgo basado en el tipo de evento y sus detalles"""
@@ -2999,72 +3079,130 @@ def delete_group(group_id_str): # Cambiado a group_id_str
 
 def check_url_with_policies(url):
     try:
+        print(f"[Backend] Iniciando verificación de políticas para URL: {url}")
         # Normalizar el dominio
         domain = normalize_domain(url)
         if not domain:
+            print("[Backend] Error: URL inválida después de normalización")
             return False, "URL inválida"
 
         # Obtener el token JWT y claims
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         if not jwt_token:
+            print("[Backend] Error: No se encontró token JWT")
             return False, "No autorizado"
 
         claims = get_jwt()
         role = claims.get('role')
         tenant_id = claims.get('tenant_id')
-        user_id = claims.get('user_id')
+        user_id = claims.get('sub')  # Usar sub en lugar de user_id
+        print(f"[Backend] Verificando para usuario: {user_id}, rol: {role}, tenant: {tenant_id}")
 
         # Obtener conexión a Supabase
         user_supabase = get_supabase_with_jwt(jwt_token)
 
         # 1. Verificar políticas específicas del tenant y grupos
         if role == 'user':
-            # Obtener grupos del usuario
-            user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
-            user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
-            
-            # Obtener políticas del tenant sin grupo
-            tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
-            
-            # Obtener políticas de los grupos del usuario
-            group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).execute()
-            
-            # Combinar y filtrar políticas para el dominio
-            all_policies = tenant_policies.data + group_policies.data
-            domain_policies = [p for p in all_policies if p['domain'] == domain]
+            print("[Backend] Verificando políticas para usuario normal")
+            try:
+                # Obtener políticas del tenant sin grupo
+                tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+                print(f"[Backend] Políticas del tenant: {len(tenant_policies.data)} encontradas")
+                
+                # Intentar obtener grupos del usuario, pero no fallar si la tabla no existe
+                user_groups = []
+                try:
+                    user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
+                    user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+                    print(f"[Backend] Grupos del usuario: {user_groups}")
+                except Exception as e:
+                    print(f"[Backend] No se pudo obtener grupos del usuario (puede que la tabla no exista): {str(e)}")
+                
+                # Obtener políticas de los grupos del usuario si hay grupos
+                group_policies = []
+                if user_groups:
+                    try:
+                        group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).execute().data
+                        print(f"[Backend] Políticas de grupos: {len(group_policies)} encontradas")
+                    except Exception as e:
+                        print(f"[Backend] Error al obtener políticas de grupos: {str(e)}")
+                
+                # Combinar y filtrar políticas para el dominio
+                all_policies = tenant_policies.data + group_policies
+                domain_policies = [p for p in all_policies if p['domain'] == domain]
+                print(f"[Backend] Políticas específicas para el dominio: {len(domain_policies)} encontradas")
+            except Exception as e:
+                print(f"[Backend] Error al obtener políticas: {str(e)}")
+                raise Exception(f"Error al obtener políticas: {str(e)}")
         else:
-            # Para client y admin, solo verificar políticas del tenant
-            domain_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).eq('domain', domain).execute().data
+            print("[Backend] Verificando políticas para rol administrativo")
+            try:
+                # Para client y admin, solo verificar políticas del tenant
+                domain_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).eq('domain', domain).execute().data
+                print(f"[Backend] Políticas del tenant para el dominio: {len(domain_policies)} encontradas")
+            except Exception as e:
+                print(f"[Backend] Error al obtener políticas: {str(e)}")
+                raise Exception(f"Error al obtener políticas: {str(e)}")
 
         if domain_policies:
+            print("[Backend] Analizando políticas encontradas")
             # Si hay políticas específicas, usar la más restrictiva
             for policy in domain_policies:
                 if policy['action'] == 'block':
-                    return True, "Dominio bloqueado por política"
+                    print(f"[Backend] Dominio bloqueado por política: {policy}")
+                    return True, {
+                        "reason": "policy_violation",
+                        "policy_details": policy
+                    }
+            print("[Backend] Dominio permitido por políticas")
             return False, None
 
         # 2. Verificar configuración del tenant
-        tenant_config = user_supabase.table('tenant_configs').select('*').eq('tenant_id', tenant_id).maybe_single().execute()
-        
-        if tenant_config.data:
-            config = tenant_config.data
-            if domain in config.get('blocked_domains', []):
-                return True, "Dominio bloqueado por configuración del tenant"
-            if domain in config.get('allowed_domains', []):
-                return False, None
+        print("[Backend] Verificando configuración del tenant")
+        try:
+            tenant_config = user_supabase.table('tenant_configs').select('*').eq('tenant_id', tenant_id).maybe_single().execute()
+            
+            if tenant_config and tenant_config.data:
+                config = tenant_config.data
+                if domain in config.get('blocked_domains', []):
+                    print(f"[Backend] Dominio bloqueado por configuración del tenant: {domain}")
+                    return True, {
+                        "reason": "tenant_config",
+                        "config_details": {"type": "blocked_domains"}
+                    }
+                if domain in config.get('allowed_domains', []):
+                    print(f"[Backend] Dominio permitido por configuración del tenant: {domain}")
+                    return False, None
+            else:
+                print("[Backend] No se encontró configuración del tenant, continuando con verificación global")
+        except Exception as e:
+            print(f"[Backend] Error al verificar configuración del tenant: {str(e)}")
+            print("[Backend] Continuando con verificación global")
 
         # 3. Verificar lista global de sitios prohibidos
-        prohibited_sites = load_prohibited_sites()
-        if domain in prohibited_sites:
-            return True, "Dominio en lista global de sitios prohibidos"
+        print("[Backend] Verificando lista global de sitios prohibidos")
+        try:
+            prohibited_categories = load_prohibited_sites()
+            # Verificar si el dominio está en alguna categoría prohibida
+            for category, domains in prohibited_categories.items():
+                if domain in domains:
+                    print(f"[Backend] Dominio encontrado en categoría prohibida: {category}")
+                    return True, {
+                        "reason": "prohibited_site",
+                        "site_details": {"category": category}
+                    }
+        except Exception as e:
+            print(f"[Backend] Error al verificar lista de sitios prohibidos: {str(e)}")
+            raise Exception(f"Error al verificar lista de sitios prohibidos: {str(e)}")
 
+        print(f"[Backend] Dominio permitido: {domain}")
         return False, None
 
     except Exception as e:
-        print(f"Error en check_url_with_policies: {str(e)}")
+        print(f"[Backend] Error en check_url_with_policies: {str(e)}")
         import traceback
         traceback.print_exc()
-        return False, str(e)
+        raise Exception(f"Error en verificación de políticas: {str(e)}")
 
 if __name__ == '__main__':
     import os

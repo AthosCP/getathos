@@ -5,28 +5,58 @@ interface UserInteractionEvent {
     id?: string;
     class?: string;
     text?: string;
+    value?: string;
+    href?: string;
   };
   nombre_archivo?: string;
   timestamp: string;
   url_origen: string;
+  texto?: string;
 }
 
-// Función para obtener información del elemento target
-function getElementInfo(element: Element): { tag: string; id?: string; class?: string; text?: string } {
-  return {
-    tag: element.tagName.toLowerCase(),
-    id: element.id || undefined,
-    class: element.className || undefined,
-    text: element.textContent?.trim().substring(0, 100) || undefined
-  };
+// Función para obtener información del elemento
+function getElementInfo(element: HTMLElement): { tag: string; id?: string; class?: string; text?: string } {
+    const info = {
+        tag: element.tagName.toLowerCase(),
+        id: element.id || undefined,
+        class: element.className || undefined,
+        text: element.textContent?.trim().substring(0, 100) || undefined
+    };
+    console.log('[Athos] Información del elemento:', info);
+    return info;
 }
 
-// Función para enviar evento al background script
-function sendEventToBackground(event: UserInteractionEvent) {
-  chrome.runtime.sendMessage({
-    type: 'user_interaction',
-    data: event
-  });
+// Función para enviar evento al background
+function sendEventToBackground(eventData: any) {
+    console.log("[Athos] Enviando evento al background:", eventData);
+    try {
+        chrome.runtime.sendMessage({
+            type: 'user_interaction',
+            ...eventData
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.warn("[Athos] Error al enviar mensaje:", chrome.runtime.lastError.message);
+                // Intentar reconectar si el contexto es inválido
+                if (chrome.runtime.lastError.message.includes("Extension context invalidated")) {
+                    console.log("[Athos] Intentando reconectar...");
+                    setTimeout(() => {
+                        sendEventToBackground(eventData);
+                    }, 1000); // Reintentar después de 1 segundo
+                }
+                return;
+            }
+            console.log("[Athos] Respuesta del background:", response);
+        });
+    } catch (error) {
+        console.error("[Athos] Error al enviar evento:", error);
+        // Intentar reconectar si el contexto es inválido
+        if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+            console.log("[Athos] Intentando reconectar...");
+            setTimeout(() => {
+                sendEventToBackground(eventData);
+            }, 1000); // Reintentar después de 1 segundo
+        }
+    }
 }
 
 // Variable para controlar el estado de autenticación
@@ -51,53 +81,58 @@ function removeAllListeners() {
   window.removeEventListener('beforeprint', printHandler);
 }
 
-// Handlers para los eventos
-function clickHandler(e: MouseEvent) {
-  if (!isAuthenticated) return;
-  const target = e.target as Element;
-  sendEventToBackground({
-    tipo_evento: 'click',
-    elemento_target: getElementInfo(target),
-    timestamp: new Date().toISOString(),
-    url_origen: window.location.href
-  });
+// Manejador de clicks
+function clickHandler(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    const elementInfo = getElementInfo(target);
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'click',
+        elemento_target: elementInfo,
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: target.textContent?.trim().substring(0, 100) || null
+    };
+    
+    console.log('[Athos] Evento de click capturado:', eventData);
+    sendEventToBackground(eventData);
 }
 
-function copyHandler() {
-  if (!isAuthenticated) return;
-  const selection = window.getSelection();
-  const text = selection?.toString().substring(0, 100);
-  chrome.runtime.sendMessage({
-    type: 'user_interaction',
-    data: {
-      tipo_evento: 'copy',
-      elemento_target: {
-        tag: 'selection',
-        text: text
-      },
-      timestamp: new Date().toISOString(),
-      url_origen: window.location.href
-    }
-  });
+// Manejador de copia
+function copyHandler(event: ClipboardEvent) {
+    const selection = window.getSelection();
+    const selectedText = selection?.toString() || '';
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'copy',
+        elemento_target: {
+            tag: 'selection',
+            text: selectedText.substring(0, 100)
+        },
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: selectedText.substring(0, 100)
+    };
+    
+    console.log('[Athos] Evento de copia capturado:', eventData);
+    sendEventToBackground(eventData);
 }
 
-function pasteHandler(e: ClipboardEvent) {
-  if (!isAuthenticated) return;
-  const target = e.target as Element;
-  let pastedText = '';
-  if (e.clipboardData) {
-    pastedText = e.clipboardData.getData('text').substring(0, 100);
-  }
-  chrome.runtime.sendMessage({
-    type: 'user_interaction',
-    data: {
-      tipo_evento: 'paste',
-      elemento_target: getElementInfo(target),
-      pasted_text: pastedText,
-      timestamp: new Date().toISOString(),
-      url_origen: window.location.href
-    }
-  });
+// Manejador de pegado
+function pasteHandler(event: ClipboardEvent) {
+    const pastedText = event.clipboardData?.getData('text') || '';
+    const target = event.target as HTMLElement;
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'paste',
+        elemento_target: getElementInfo(target),
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: pastedText.substring(0, 100)
+    };
+    
+    console.log('[Athos] Evento de pegado capturado:', eventData);
+    sendEventToBackground(eventData);
 }
 
 function changeHandler(e: Event) {
