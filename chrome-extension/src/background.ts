@@ -15,6 +15,8 @@ interface Policy {
   action: PolicyAction;
   category?: string;
   block_reason?: string;
+  group_id?: string | null;
+  group?: { name: string } | null;
 }
 
 interface NavigationEvent {
@@ -169,9 +171,23 @@ async function getCurrentTabId(): Promise<number> {
 function isBlocked(url: string): boolean {
   try {
     const hostname = new URL(url).hostname;
+    
+    // Primero verificamos si hay una política específica de grupo que bloquee
+    const groupBlockPolicy = policies.find(policy =>
+      (hostname === policy.domain || hostname.endsWith('.' + policy.domain)) &&
+      policy.action === PolicyAction.Block &&
+      policy.group_id !== null
+    );
+    
+    if (groupBlockPolicy) {
+      return true;
+    }
+    
+    // Si no hay política de grupo que bloquee, verificamos las políticas generales
     return policies.some(policy =>
       (hostname === policy.domain || hostname.endsWith('.' + policy.domain)) &&
-      policy.action === PolicyAction.Block
+      policy.action === PolicyAction.Block &&
+      policy.group_id === null
     );
   } catch (e) {
     console.error('Error checking if URL is blocked:', e);
@@ -299,38 +315,22 @@ setInterval(fetchPolicies, 5 * 60 * 1000);
 // Inicializar políticas al cargar background
 fetchPolicies();
 
-// Listener para mensajes del content script
+// Escuchar mensajes del content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'user_interaction') {
-    const event = message.data as UserInteractionEvent;
-    // Preparar event_details según el tipo de evento
-    const eventDetails: Record<string, any> = {
-      tipo_evento: event.tipo_evento,
-      elemento_target: event.elemento_target,
-      nombre_archivo: event.nombre_archivo,
-      timestamp: event.timestamp
-    };
-    if (event.tipo_evento === 'copy' && event.elemento_target?.text) {
-      eventDetails.texto_copiado = event.elemento_target.text;
-    }
-    if (event.tipo_evento === 'paste' && (event as any).pasted_text) {
-      eventDetails.texto_pegado = (event as any).pasted_text;
-    }
-    if (event.tipo_evento === 'cut' && event.elemento_target?.text) {
-      eventDetails.texto_cortado = event.elemento_target.text;
-    }
-    if (event.tipo_evento === 'print') {
-      eventDetails.accion = 'imprimir';
-    }
-    if (event.tipo_evento === 'download') {
-      eventDetails.nombre_archivo = event.nombre_archivo;
-    }
+    const event = message.data;
     registerNavigation(
       event.url_origen,
-      'interaccion_usuario',
-      'navegacion',
-      eventDetails
-    );
+      'interaccion',
+      event.tipo_evento,
+      {
+        elemento_target: event.elemento_target,
+        texto: event.texto,
+        nombre_archivo: event.nombre_archivo
+      }
+    ).catch(error => {
+      console.error('Error al registrar interacción:', error);
+    });
   } else if (message.type === 'user_logout') {
     const { url, timestamp } = message.data;
     registerNavigation(

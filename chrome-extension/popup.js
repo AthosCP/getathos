@@ -104,7 +104,10 @@ function displayPolicies(policies) {
     html += '<h4>Dominios bloqueados</h4><ul class="blocked-domains">';
     html += blockedDomains.map(policy => `
       <li>
-        <span class="domain">${policy.domain}</span>
+        <div class="policy-info">
+          <span class="domain">${policy.domain}</span>
+          ${policy.group ? `<span class="group">Grupo: ${policy.group.name}</span>` : '<span class="group">Todos los usuarios</span>'}
+        </div>
         <span class="block">Bloqueado</span>
       </li>
     `).join('');
@@ -116,7 +119,10 @@ function displayPolicies(policies) {
     html += '<h4>Dominios permitidos</h4><ul class="allowed-domains">';
     html += allowedDomains.map(policy => `
       <li>
-        <span class="domain">${policy.domain}</span>
+        <div class="policy-info">
+          <span class="domain">${policy.domain}</span>
+          ${policy.group ? `<span class="group">Grupo: ${policy.group.name}</span>` : '<span class="group">Todos los usuarios</span>'}
+        </div>
         <span class="allow">Permitido</span>
       </li>
     `).join('');

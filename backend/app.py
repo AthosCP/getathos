@@ -35,25 +35,94 @@ prohibited_sites = load_prohibited_sites()
 
 # Función para verificar una URL usando Google Web Risk API
 def check_url_with_webrisk(url):
-    api_key = os.getenv('GOOGLE_WEBRISK_API_KEY')
-    endpoint = f"https://webrisk.googleapis.com/v1/uris:search?key={api_key}"
-    params = {
-        "uri": url if url.startswith('http') else f"http://{url}",
-        "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE"]
-    }
     try:
-        response = requests.get(endpoint, params=params)
-        data = response.json()
-        if "threat" in data:
-            return {
-                "threat_found": True,
-                "category": data["threat"]["threatTypes"],
-                "url": params["uri"]
-            }
-        return None
+        # Normalizar el dominio
+        domain = normalize_domain(url)
+        if not domain:
+            return False, "URL inválida"
+
+        # Obtener el token JWT y claims
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not jwt_token:
+            return False, "No autorizado"
+
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        user_id = claims.get('user_id')
+
+        # Obtener conexión a Supabase
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # 1. Verificar políticas específicas del tenant y grupos
+        if role == 'user':
+            # Obtener grupos del usuario
+            user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
+            user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+            
+            # Ejecutar consultas separadas y combinar resultados
+            # Primero obtenemos las políticas del tenant sin grupo
+            tenant_policies = user_supabase.table('policies').select('*')\
+                .eq('tenant_id', tenant_id)\
+                .is_('group_id', 'null')\
+                .eq('domain', domain)\
+                .execute()
+            
+            group_policies = None
+            if user_groups:
+                # Luego obtenemos las políticas de los grupos del usuario
+                group_policies = user_supabase.table('policies').select('*')\
+                    .in_('group_id', user_groups)\
+                    .eq('domain', domain)\
+                    .execute()
+            
+            # Combinamos los resultados
+            policies_data = tenant_policies.data
+            if group_policies and group_policies.data:
+                policies_data += group_policies.data
+        else:
+            # Para otros roles, simplemente filtramos por tenant_id
+            policies = user_supabase.table('policies').select('*')\
+                .eq('tenant_id', tenant_id)\
+                .eq('domain', domain)\
+                .execute()
+            policies_data = policies.data
+
+        if policies_data:
+            # Si hay políticas específicas, usar la más restrictiva
+            for policy in policies_data:
+                if policy['action'] == 'block':
+                    return True, "Dominio bloqueado por política"
+            return False, None
+
+        # 2. Verificar configuración del tenant
+        tenant_config = user_supabase.table('tenant_configs').select('*').eq('tenant_id', tenant_id).maybe_single().execute()
+        
+        if tenant_config.data:
+            config = tenant_config.data
+            if domain in config.get('blocked_domains', []):
+                return True, "Dominio bloqueado por configuración del tenant"
+            if domain in config.get('allowed_domains', []):
+                return False, None
+
+        # 3. Verificar lista global de sitios prohibidos
+        prohibited_sites = load_prohibited_sites()
+        if domain in prohibited_sites:
+            return True, "Dominio en lista global de sitios prohibidos"
+
+        return False, None
+
     except Exception as e:
-        print(f"Error consultando Web Risk REST: {e}")
-        return None
+        print(f"Error en check_url_with_webrisk: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
+
+    except Exception as e:
+        print(f"Error en check_url_with_webrisk: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
 
 def normalize_domain(domain):
     return domain.replace('www.', '').lower().strip()
@@ -637,13 +706,19 @@ def get_policies():
         claims = get_jwt()
         role = claims.get('role')
         tenant_id = claims.get('tenant_id')
+        user_id = claims.get('user_id')
         action = request.args.get('action')
-        group_id_filter = request.args.get('group_id') # Nuevo filtro
+        group_id_filter = request.args.get('group_id')
+        
         print(f"GET /api/policies - JWT claims: {claims}")
-        print(f"Role: {role}, Tenant ID: {tenant_id}, Group ID Filter: {group_id_filter}")
+        print(f"Role: {role}, Tenant ID: {tenant_id}, User ID: {user_id}, Group ID Filter: {group_id_filter}")
+        
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
-        query = user_supabase.table('policies').select('*, groups(name)') # Incluir nombre del grupo si existe
+        
+        # Construir la consulta base
+        query = user_supabase.table('policies').select('*, groups(name)')
+        
         if role == 'admin':
             print("Usuario es admin, puede ver todas las políticas")
             admin_tenant_filter = request.args.get('tenant_id')
@@ -655,28 +730,44 @@ def get_policies():
                     return jsonify({"error": "Formato de tenant_id inválido para el filtro de admin."}), 400
         elif role in ['client', 'user']:
             print(f"Usuario es {role}, filtrando por tenant_id: {tenant_id}")
-            query = query.eq('tenant_id', tenant_id)
+            
+            # Obtener los grupos del usuario
+            user_groups = []
+            if role == 'user':
+                user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
+                if user_groups_res.data:
+                    user_groups = [g['group_id'] for g in user_groups_res.data]
+            
+            # Construir la consulta para obtener todas las políticas relevantes
+            if user_groups:
+                # Para usuarios con grupos, obtenemos políticas del tenant y de sus grupos
+                policies = user_supabase.table('policies').select('*, groups(name)').or_(
+                    f'tenant_id.eq.{tenant_id},group_id.in.({",".join(user_groups)})'
+                ).execute().data
+            else:
+                # Para usuarios sin grupos o clientes, obtenemos todas las políticas del tenant
+                policies = user_supabase.table('policies').select('*, groups(name)').eq('tenant_id', tenant_id).execute().data
         else:
             print(f"Rol no autorizado: {role}")
             return jsonify({"error": "No autorizado"}), 403
+            
         if action:
-            query = query.eq('action', action)
+            policies = [p for p in policies if p['action'] == action]
+            
         if group_id_filter:
             try:
                 UUID(group_id_filter, version=4)
-                query = query.eq('group_id', group_id_filter)
+                policies = [p for p in policies if p.get('group_id') == group_id_filter]
             except ValueError:
                 return jsonify({"error": "Formato de group_id inválido para el filtro."}), 400
-        policies = query.order('created_at', desc=True).execute()
+                
+        # Procesar los resultados para incluir la información del grupo
         processed_policies = []
-        for policy_data in policies.data:
-            if policy_data.get('groups') is not None:
-                policy_data['group'] = policy_data.pop('groups')
-                if policy_data['group'] is None:
-                    del policy_data['group']
-            elif 'groups' in policy_data:
-                del policy_data['groups']
-            processed_policies.append(policy_data)
+        for policy in policies:
+            if policy.get('groups'):
+                policy['group'] = policy.pop('groups')
+            processed_policies.append(policy)
+            
         print(f"Políticas encontradas: {len(processed_policies)}")
         return jsonify({"success": True, "data": processed_policies})
     except Exception as e:
@@ -1044,117 +1135,106 @@ def get_navigation_logs():
 @jwt_required()
 def create_navigation_log():
     try:
+        claims = get_jwt()
+        user_id = claims.get('user_id')
+        tenant_id = claims.get('tenant_id')
         data = request.get_json()
+        
         if not data:
-            return jsonify({"error": "No data provided"}), 400
-
-        # Obtener datos del token JWT
-        jwt_token = get_jwt()
-        user_id = jwt_token.get('sub')
-        tenant_id = jwt_token.get('tenant_id')
-        email = jwt_token.get('email')
-        role = jwt_token.get('role')
-
-        # Obtener el cliente autenticado
-        auth_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(auth_token)
-
-        # Obtener datos de la solicitud
-        domain = data.get('domain')
-        url = data.get('url')
-        timestamp = data.get('timestamp')
-        ip_address = data.get('ip_address')
-        user_agent = data.get('user_agent')
-        tab_title = data.get('tab_title')
-        time_on_page = data.get('time_on_page', 0)
-        open_tabs_count = data.get('open_tabs_count', 0)
-        tab_focused = data.get('tab_focused', True)
-        event_type = data.get('event_type', 'navegacion')  # Valor por defecto
-        event_details = data.get('event_details', {})
-        risk_score = data.get('risk_score', 0)
-        city = data.get('city')
-        country = data.get('country')
-
-        print(f"DEBUG: Sitios prohibidos cargados: {prohibited_sites}")
-        print(f"DEBUG: Dominio recibido: {domain}")
-
-        # Normalizar dominio (ej. quitar www. y minúsculas)
-        def normalize_domain(domain):
-            normalized = domain.replace('www.', '').lower().strip() if domain else ''
-            print(f"DEBUG: Dominio normalizado: {normalized}")
-            return normalized
-
-        normalized_domain = normalize_domain(domain)
-
-        # Inicialización
-        action = 'visitado'
-        policy_info = {}
-        block_reasons = []
-        category_found = None
-
-        # Chequeo de lista prohibida
-        if isinstance(prohibited_sites, dict):
-            for category, domains_list in prohibited_sites.items():
-                if category == 'recomendaciones':
-                    continue
-                if isinstance(domains_list, list):
-                    normalized_list = [normalize_domain(d) for d in domains_list]
-                    print(f"DEBUG: Comparando {normalized_domain} con lista de {category}: {normalized_list}")
-                    if normalized_domain in normalized_list:
-                        print(f"DEBUG: ¡DOMINIO BLOQUEADO! {normalized_domain} encontrado en categoría {category}")
-                        action = 'bloqueado'
-                        event_type = 'bloqueo'  # Cambiar el tipo de evento a bloqueo
-                        category_found = category
-                        block_reasons.append('prohibited_list')
-                        policy_info['category'] = category_found
-                        policy_info['block_reason'] = block_reasons
-                        event_details = {
-                            'reason': 'prohibited_list',
-                            'category': category,
-                            'time_on_page_details': {'is_periodic_update': False}
-                        }
-                        break  # Salir del bucle una vez encontrado
-
-        # Si hay algún motivo de bloqueo, asegúrate de que action sea 'bloqueado'
-        if block_reasons:
-            action = 'bloqueado'
-            print(f"DEBUG: Acción final: {action} por razones: {block_reasons}")
-
-        # Construye el log_data con todos los campos requeridos
+            return jsonify({"error": "Datos requeridos"}), 400
+            
+        # Determinar si es una navegación o una interacción
+        is_interaction = data.get('event_type') in ['click', 'copy', 'paste', 'download', 'file_upload', 'cut', 'print']
+        
+        if is_interaction:
+            # Para interacciones, usamos la URL actual
+            url = data.get('url_origen')
+            domain = normalize_domain(url)
+            action = 'interaccion'
+            event_type = data.get('event_type')
+            event_details = {
+                'tipo_evento': event_type,
+                'elemento_target': data.get('elemento_target'),
+                'texto': data.get('texto'),
+                'nombre_archivo': data.get('nombre_archivo')
+            }
+        else:
+            # Para navegación normal
+            url = data.get('url')
+            domain = normalize_domain(url)
+            if not domain:
+                return jsonify({"error": "URL inválida"}), 400
+                
+            # Verificar políticas y configuraciones
+            is_blocked, reason = check_url_with_policies(url)
+            action = 'bloqueado' if is_blocked else 'permitido'
+            event_type = 'navegacion'
+            event_details = None
+            
+        # Registrar el log
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
         log_data = {
-            "user_id": user_id,
-            "tenant_id": tenant_id,
-            "domain": domain,
-            "url": url,
-            "timestamp": timestamp,
-            "action": action,
-            "policy_info": policy_info,
-            "ip_address": ip_address,
-            "user_agent": user_agent,
-            "tab_title": tab_title,
-            "time_on_page": time_on_page,
-            "open_tabs_count": open_tabs_count,
-            "tab_focused": tab_focused,
-            "event_type": event_type,  # Usar el event_type actualizado
-            "event_details": event_details,  # Usar los event_details actualizados
-            "risk_score": risk_score,
-            "city": city,
-            "country": country
+            'user_id': user_id,
+            'tenant_id': tenant_id,
+            'domain': domain,
+            'url': url,
+            'action': action,
+            'event_type': event_type,
+            'event_details': event_details,
+            'policy_info': {'reason': reason} if reason else None,
+            'risk_score': calculate_risk_score(event_type, event_details)
         }
-
-        print(f"DEBUG: Datos finales a guardar - action: {action}, event_type: {event_type}, policy_info: {policy_info}")
-
-        # Insertar en la base de datos usando el cliente autenticado
-        try:
-            result = user_supabase.table('navigation_logs').insert(log_data).execute()
-            return jsonify({"message": "Navigation log created successfully", "data": result.data}), 201
-        except Exception as e:
-            print(f"Error al insertar log: {str(e)}")
-            return jsonify({"error": f"Error creating navigation log: {str(e)}"}), 500
-
+        
+        log_result = user_supabase.table('navigation_logs').insert(log_data).execute()
+        
+        if not log_result.data:
+            return jsonify({"error": "Error al registrar el log"}), 500
+            
+        return jsonify({
+            "success": True,
+            "data": {
+                "blocked": action == 'bloqueado' if not is_interaction else None,
+                "reason": reason if not is_interaction else None
+            }
+        })
+        
     except Exception as e:
         print(f"Error en create_navigation_log: {str(e)}")
-        return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+def calculate_risk_score(event_type: str, event_details: dict) -> int:
+    """Calcula el puntaje de riesgo basado en el tipo de evento y sus detalles"""
+    base_scores = {
+        'navegacion': 10,
+        'click': 15,
+        'copy': 25,
+        'paste': 25,
+        'download': 35,
+        'file_upload': 35,
+        'cut': 25,
+        'print': 30
+    }
+    
+    score = base_scores.get(event_type, 10)
+    
+    # Ajustar score basado en detalles específicos
+    if event_details:
+        if event_type in ['copy', 'paste', 'cut']:
+            text = event_details.get('texto', '')
+            if text and len(text) > 100:  # Texto largo
+                score += 10
+        elif event_type in ['download', 'file_upload']:
+            filename = event_details.get('nombre_archivo', '')
+            if filename:
+                ext = filename.split('.')[-1].lower()
+                if ext in ['doc', 'docx', 'pdf', 'xls', 'xlsx']:  # Archivos sensibles
+                    score += 15
+    
+    return min(score, 100)  # Máximo 100
 
 @app.route('/api/navigation_logs/block', methods=['POST'])
 @jwt_required()
@@ -2916,6 +2996,75 @@ def delete_group(group_id_str): # Cambiado a group_id_str
         return jsonify({"success": False, "error": str(e)}), 500
 
 # --- FIN ENDPOINTS DE GRUPOS DE USUARIOS ---
+
+def check_url_with_policies(url):
+    try:
+        # Normalizar el dominio
+        domain = normalize_domain(url)
+        if not domain:
+            return False, "URL inválida"
+
+        # Obtener el token JWT y claims
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not jwt_token:
+            return False, "No autorizado"
+
+        claims = get_jwt()
+        role = claims.get('role')
+        tenant_id = claims.get('tenant_id')
+        user_id = claims.get('user_id')
+
+        # Obtener conexión a Supabase
+        user_supabase = get_supabase_with_jwt(jwt_token)
+
+        # 1. Verificar políticas específicas del tenant y grupos
+        if role == 'user':
+            # Obtener grupos del usuario
+            user_groups_res = user_supabase.table('user_groups').select('group_id').eq('user_id', user_id).execute()
+            user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+            
+            # Obtener políticas del tenant sin grupo
+            tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+            
+            # Obtener políticas de los grupos del usuario
+            group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).execute()
+            
+            # Combinar y filtrar políticas para el dominio
+            all_policies = tenant_policies.data + group_policies.data
+            domain_policies = [p for p in all_policies if p['domain'] == domain]
+        else:
+            # Para client y admin, solo verificar políticas del tenant
+            domain_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).eq('domain', domain).execute().data
+
+        if domain_policies:
+            # Si hay políticas específicas, usar la más restrictiva
+            for policy in domain_policies:
+                if policy['action'] == 'block':
+                    return True, "Dominio bloqueado por política"
+            return False, None
+
+        # 2. Verificar configuración del tenant
+        tenant_config = user_supabase.table('tenant_configs').select('*').eq('tenant_id', tenant_id).maybe_single().execute()
+        
+        if tenant_config.data:
+            config = tenant_config.data
+            if domain in config.get('blocked_domains', []):
+                return True, "Dominio bloqueado por configuración del tenant"
+            if domain in config.get('allowed_domains', []):
+                return False, None
+
+        # 3. Verificar lista global de sitios prohibidos
+        prohibited_sites = load_prohibited_sites()
+        if domain in prohibited_sites:
+            return True, "Dominio en lista global de sitios prohibidos"
+
+        return False, None
+
+    except Exception as e:
+        print(f"Error en check_url_with_policies: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
 
 if __name__ == '__main__':
     import os

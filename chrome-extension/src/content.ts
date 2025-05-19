@@ -29,8 +29,31 @@ function sendEventToBackground(event: UserInteractionEvent) {
   });
 }
 
-// Listener para clics
-document.addEventListener('click', (e) => {
+// Variable para controlar el estado de autenticación
+let isAuthenticated = false;
+
+// Función para verificar autenticación
+async function checkAuth() {
+  const { jwt_token } = await chrome.storage.local.get('jwt_token');
+  isAuthenticated = !!jwt_token;
+  if (!isAuthenticated) {
+    removeAllListeners();
+  }
+}
+
+// Función para remover todos los listeners
+function removeAllListeners() {
+  document.removeEventListener('click', clickHandler);
+  document.removeEventListener('copy', copyHandler);
+  document.removeEventListener('paste', pasteHandler);
+  document.removeEventListener('change', changeHandler);
+  document.removeEventListener('cut', cutHandler);
+  window.removeEventListener('beforeprint', printHandler);
+}
+
+// Handlers para los eventos
+function clickHandler(e: MouseEvent) {
+  if (!isAuthenticated) return;
   const target = e.target as Element;
   sendEventToBackground({
     tipo_evento: 'click',
@@ -38,13 +61,12 @@ document.addEventListener('click', (e) => {
     timestamp: new Date().toISOString(),
     url_origen: window.location.href
   });
-});
+}
 
-// Listener para copiar
-document.addEventListener('copy', () => {
+function copyHandler() {
+  if (!isAuthenticated) return;
   const selection = window.getSelection();
   const text = selection?.toString().substring(0, 100);
-  console.log('[Athos] Copiar:', text);
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
@@ -57,16 +79,15 @@ document.addEventListener('copy', () => {
       url_origen: window.location.href
     }
   });
-});
+}
 
-// Listener para pegar
-document.addEventListener('paste', (e) => {
+function pasteHandler(e: ClipboardEvent) {
+  if (!isAuthenticated) return;
   const target = e.target as Element;
   let pastedText = '';
   if (e.clipboardData) {
     pastedText = e.clipboardData.getData('text').substring(0, 100);
   }
-  console.log('[Athos] Pegar:', pastedText, 'en', getElementInfo(target));
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
@@ -77,28 +98,10 @@ document.addEventListener('paste', (e) => {
       url_origen: window.location.href
     }
   });
-});
+}
 
-// Listener para descargas
-document.addEventListener('click', (e) => {
-  const target = e.target as Element;
-  const anchor = target.closest('a');
-  if (anchor && anchor.hasAttribute('download')) {
-    chrome.runtime.sendMessage({
-      type: 'user_interaction',
-      data: {
-        tipo_evento: 'download',
-        elemento_target: getElementInfo(anchor),
-        nombre_archivo: anchor.getAttribute('download') || undefined,
-        timestamp: new Date().toISOString(),
-        url_origen: window.location.href
-      }
-    });
-  }
-});
-
-// Listener para carga de archivos
-document.addEventListener('change', (e) => {
+function changeHandler(e: Event) {
+  if (!isAuthenticated) return;
   const target = e.target as HTMLInputElement;
   if (target.type === 'file') {
     const files = Array.from(target.files || []);
@@ -115,13 +118,12 @@ document.addEventListener('change', (e) => {
       });
     });
   }
-});
+}
 
-// Listener para cortar
-document.addEventListener('cut', () => {
+function cutHandler() {
+  if (!isAuthenticated) return;
   const selection = window.getSelection();
   const text = selection?.toString().substring(0, 100);
-  console.log('[Athos] Cortar:', text);
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
@@ -134,11 +136,10 @@ document.addEventListener('cut', () => {
       url_origen: window.location.href
     }
   });
-});
+}
 
-// Listener para imprimir
-window.addEventListener('beforeprint', () => {
-  console.log('[Athos] Imprimir');
+function printHandler() {
+  if (!isAuthenticated) return;
   chrome.runtime.sendMessage({
     type: 'user_interaction',
     data: {
@@ -148,7 +149,39 @@ window.addEventListener('beforeprint', () => {
       url_origen: window.location.href
     }
   });
+}
+
+// Agregar listeners
+function addAllListeners() {
+  document.addEventListener('click', clickHandler);
+  document.addEventListener('copy', copyHandler);
+  document.addEventListener('paste', pasteHandler);
+  document.addEventListener('change', changeHandler);
+  document.addEventListener('cut', cutHandler);
+  window.addEventListener('beforeprint', printHandler);
+}
+
+// Inicialización
+async function initialize() {
+  await checkAuth();
+  if (isAuthenticated) {
+    addAllListeners();
+  }
+}
+
+// Escuchar cambios en el storage
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.jwt_token) {
+    checkAuth().then(() => {
+      if (isAuthenticated) {
+        addAllListeners();
+      }
+    });
+  }
 });
+
+// Iniciar
+initialize();
 
 // Mensaje de inicialización
 console.log('Athos Content Script: Monitoreo de interacciones activo'); 

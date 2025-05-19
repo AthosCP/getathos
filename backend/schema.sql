@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS policies (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
     domain TEXT NOT NULL,
     action TEXT CHECK (action IN ('allow', 'block')) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    CONSTRAINT unique_domain_per_tenant_group UNIQUE (domain, tenant_id, group_id)
 );
 
 -- Tabla de historial de navegación
@@ -48,8 +50,11 @@ CREATE TABLE IF NOT EXISTS navigation_logs (
     domain TEXT NOT NULL,
     url TEXT NOT NULL,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-    action TEXT CHECK (action IN ('visitado', 'bloqueado', 'permitido')) NOT NULL,
-    policy_info JSONB DEFAULT NULL
+    action TEXT CHECK (action IN ('visitado', 'bloqueado', 'permitido', 'interaccion')) NOT NULL,
+    event_type TEXT CHECK (event_type IN ('navegacion', 'click', 'copy', 'paste', 'download', 'file_upload', 'cut', 'print')) NOT NULL,
+    event_details JSONB DEFAULT NULL,
+    policy_info JSONB DEFAULT NULL,
+    risk_score INTEGER DEFAULT 0
 );
 
 -- Tabla de estadísticas de alertas
@@ -208,4 +213,9 @@ USING (
 
 -- Índices para mejorar el rendimiento
 CREATE INDEX IF NOT EXISTS idx_alert_stats_tenant_id ON alert_stats(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_alert_stats_category ON alert_stats(category); 
+CREATE INDEX IF NOT EXISTS idx_alert_stats_category ON alert_stats(category);
+
+-- Índices para mejorar el rendimiento
+CREATE INDEX IF NOT EXISTS idx_policies_tenant_id ON policies(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_policies_group_id ON policies(group_id);
+CREATE INDEX IF NOT EXISTS idx_policies_domain ON policies(domain); 

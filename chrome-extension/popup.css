@@ -157,6 +157,22 @@ button.athos-btn:active {
   align-items: center;
 }
 
+#policiesList .policy-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#policiesList .domain {
+  font-weight: 500;
+  color: #fff;
+}
+
+#policiesList .group {
+  font-size: 12px;
+  color: #888;
+}
+
 #policiesList li span.allow {
   color: #52c41a;
   font-weight: 500;
@@ -275,4 +291,76 @@ button.athos-btn:active {
 
 .athos-title {
   text-shadow: 0 0 5px rgba(0, 161, 255, 0.7), 0 0 10px rgba(0, 161, 255, 0.5);
+}
+
+.athos-policies {
+  margin: 20px 0;
+  background-color: #1a1a1a;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 161, 255, 0.2);
+}
+
+.athos-policy-section {
+  margin-bottom: 15px;
+}
+
+.athos-policy-section h4 {
+  color: #00a1ff;
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.athos-policy-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.athos-policy-section li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #333;
+}
+
+.athos-policy-section li:last-child {
+  border-bottom: none;
+}
+
+.policy-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.policy-info .domain {
+  font-weight: 500;
+  color: #fff;
+}
+
+.policy-info .group {
+  font-size: 12px;
+  color: #888;
+}
+
+.athos-policy-section li span.allow {
+  color: #52c41a;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.athos-policy-section li span.block {
+  color: #ff4d4f;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  color: #888;
+  font-size: 14px;
+  margin: 10px 0;
 } 
