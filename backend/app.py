@@ -1206,52 +1206,66 @@ def verify_policies(url):
         # Obtener claims del token
         claims = get_jwt()
         tenant_id = claims.get('tenant_id')
+        role = claims.get('role')
+        user_id = claims.get('user_id')
+        
+        print(f"[Backend] Verificando políticas para tenant_id: {tenant_id}, role: {role}, user_id: {user_id}")
         
         # Obtener conexión a Supabase
         user_supabase = get_supabase_with_jwt(jwt_token)
         
-        # 1. Verificar políticas específicas del tenant
-        tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).execute()
+        # 1. Verificar políticas específicas del tenant y grupos
+        policies_data = []
+        if role == 'user':
+            # Obtener grupos del usuario
+            user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
+            user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+            
+            # Obtener políticas del tenant sin grupo
+            tenant_policies = user_supabase.table('policies').select('*')\
+                .eq('tenant_id', tenant_id)\
+                .is_('group_id', 'null')\
+                .execute()
+            
+            policies_data = tenant_policies.data
+            
+            # Obtener políticas de los grupos del usuario
+            if user_groups:
+                group_policies = user_supabase.table('policies').select('*')\
+                    .in_('group_id', user_groups)\
+                    .execute()
+                if group_policies.data:
+                    policies_data.extend(group_policies.data)
+        else:
+            # Para otros roles, simplemente filtramos por tenant_id
+            policies = user_supabase.table('policies').select('*')\
+                .eq('tenant_id', tenant_id)\
+                .execute()
+            policies_data = policies.data
         
-        # 2. Verificar políticas globales
-        global_policies = user_supabase.table('policies').select('*').is_('tenant_id', 'null').execute()
-        
-        # 3. Verificar lista global de sitios prohibidos
-        prohibited_sites = load_prohibited_sites()
-        print(f"[Backend] Lista de sitios prohibidos cargada: {prohibited_sites}")
-        
-        # Verificar en la categoría de apuestas/juegos de azar
-        if 'apuestas/juegos de azar' in prohibited_sites:
-            sites = prohibited_sites['apuestas/juegos de azar']
-            print(f"[Backend] Verificando en categoría 'apuestas/juegos de azar': {sites}")
-            if domain in sites:
-                print(f"[Backend] ¡DOMINIO ENCONTRADO EN LISTA PROHIBIDA! {domain}")
-                return {
-                    'action': 'bloqueado',
-                    'info': f'Dominio bloqueado por lista global (categoría: apuestas/juegos de azar)'
-                }
-        
-        # Verificar en todas las categorías
-        for category, sites in prohibited_sites.items():
-            print(f"[Backend] Verificando categoría: {category}")
-            print(f"[Backend] Sitios en categoría: {sites}")
-            if domain in sites:
-                print(f"[Backend] ¡DOMINIO ENCONTRADO EN LISTA PROHIBIDA! {domain}")
-                return {
-                    'action': 'bloqueado',
-                    'info': f'Dominio bloqueado por lista global (categoría: {category})'
-                }
-        
-        # Combinar políticas
-        all_policies = tenant_policies.data + global_policies.data
+        print(f"[Backend] Se encontraron {len(policies_data)} políticas")
         
         # Verificar si el dominio está bloqueado por políticas
-        for policy in all_policies:
+        for policy in policies_data:
             if policy['action'] == 'block' and domain.lower() in policy['domain'].lower():
                 print(f"[Backend] Dominio bloqueado por política: {policy['domain']}")
                 return {
                     'action': 'bloqueado',
                     'info': f'Dominio bloqueado por política: {policy["domain"]}'
+                }
+        
+        # 2. Verificar lista global de sitios prohibidos
+        prohibited_sites = load_prohibited_sites()
+        print(f"[Backend] Lista de sitios prohibidos cargada: {len(prohibited_sites)} categorías")
+        
+        # Verificar en todas las categorías
+        for category, sites in prohibited_sites.items():
+            print(f"[Backend] Verificando categoría: {category}")
+            if domain in sites:
+                print(f"[Backend] ¡DOMINIO ENCONTRADO EN LISTA PROHIBIDA! {domain}")
+                return {
+                    'action': 'bloqueado',
+                    'info': f'Dominio bloqueado por lista global (categoría: {category})'
                 }
         
         print(f"[Backend] Dominio permitido: {domain}")
@@ -2087,19 +2101,26 @@ def get_alerts():
         print(traceback.format_exc())
         return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/prohibidos', methods=['GET'])
-def get_prohibidos():
+@app.route('/api/prohibited_sites', methods=['GET'])
+def get_prohibited_sites():
     try:
+        print("[Backend] Iniciando carga de sitios prohibidos...")
         # Cargar el archivo prohibidos.json
         script_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(script_dir, 'prohibidos.json')
+        print(f"[Backend] Ruta del archivo: {file_path}")
+        
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+            print(f"[Backend] Se cargaron {len(data)} categorías de sitios prohibidos")
+        
         # Excluir la categoría 'recomendaciones' si existe
         data = {k: v for k, v in data.items() if k != 'recomendaciones'}
         return jsonify({"success": True, "data": data})
     except Exception as e:
-        print(f"Error al leer prohibidos.json: {str(e)}")
+        print(f"[Backend] Error al leer prohibidos.json: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/navigation_logs/riesgo', methods=['GET'])
@@ -2524,8 +2545,11 @@ def get_navigation_stats():
         # Distribución por categorías
         category_counts = {}
         for log in logs_data:
-            policy_info = log.get('policy_info', {}) or {}
-            category = policy_info.get('category', 'sin categoría')
+            policy_info = log.get('policy_info')
+            if isinstance(policy_info, dict):
+                category = policy_info.get('category', 'sin categoría')
+            else:
+                category = 'sin categoría'
             category_counts[category] = category_counts.get(category, 0) + 1
 
         most_frequent_category = max(category_counts.items(), key=lambda x: x[1])[0] if category_counts else None
@@ -2727,8 +2751,11 @@ def get_alerts_stats():
 
         for log in logs_data:
             # Contar por categoría
-            policy_info = log.get('policy_info') or {}
-            category = policy_info.get('category', 'sin categoría')
+            policy_info = log.get('policy_info')
+            if isinstance(policy_info, dict):
+                category = policy_info.get('category', 'sin categoría')
+            else:
+                category = 'sin categoría'
             alerts_by_category[category] = alerts_by_category.get(category, 0) + 1
 
             # Contar por usuario

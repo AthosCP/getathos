@@ -209,7 +209,7 @@
 
   async function loadCategorias() {
     try {
-      const res = await fetch(`${API_URL}/api/prohibidos`);
+      const res = await fetch(`${API_URL}/api/prohibited_sites`);
       const data = await res.json();
       if (data.success) {
         categorias = Object.keys(data.data);
@@ -328,7 +328,7 @@
           puntaje: item.risk_score || 0,
           sitio: item.domain || '-',
           hora: new Date(item.timestamp).toLocaleString(),
-          categoria: item.policy_info?.category || '-',
+          categoria: typeof item.policy_info === 'object' && item.policy_info ? item.policy_info.category || '-' : '-',
           alerta: (item.risk_score || 0) > 80
         }));
         totalPagesGeo = Math.ceil(data.total / pageSizeGeo);
