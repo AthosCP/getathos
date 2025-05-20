@@ -1256,111 +1256,58 @@ def create_navigation_log():
         data = request.get_json()
         print(f"[Backend] Datos recibidos: {data}")
         
-        # Obtener el tipo de evento
-        event_type = data.get('event_type', 'navegacion')
-        print(f"[Backend] Tipo de evento: {event_type}")
+        # Obtener claims del token JWT
+        claims = get_jwt()
+        tenant_id = claims.get('tenant_id')
+        role = claims.get('role')
+        user_id = claims.get('sub')  # sub es el user_id en el token JWT
+        
+        if not tenant_id:
+            return jsonify({"success": False, "error": "No se encontró tenant_id en el token"}), 400
+            
+        # Normalizar el dominio
+        url = data.get('url', '')
+        domain = normalize_domain(url)
         
         # Verificar políticas
-        url = data.get('url')
-        if not url:
-            return jsonify({'success': False, 'error': 'URL no proporcionada'}), 400
-            
         print(f"[Backend] Verificando políticas para dominio: {url}")
-        result = verify_policies(url, data['tenant_id'], data['role'], data.get('sub'))
+        result = verify_policies(domain, tenant_id, role, user_id)
         print(f"[Backend] Resultado de verify_policies: {result}")
         
-        # Obtener claims del JWT
-        claims = get_jwt()
-        user_id = claims.get('sub')
-        tenant_id = claims.get('tenant_id')
-        
-        # Preparar los detalles del evento
-        event_details = {}
-        
-        # Si hay datos en el request, procesarlos
-        if data.get('event_details'):
-            event_details = data['event_details']
-            print(f"[Backend] Detalles del evento encontrados en event_details: {event_details}")
-        elif data.get('tipo_evento'):
-            # Construir detalles del evento desde los campos individuales
-            event_details = {
-                'texto': data.get('texto'),
-                'tipo_evento': data.get('tipo_evento'),
-                'nombre_archivo': data.get('nombre_archivo'),
-                'elemento_target': data.get('elemento_target')
-            }
-            print(f"[Backend] Detalles del evento construidos desde campos individuales: {event_details}")
-        
-        # Si no hay detalles del evento, intentar obtenerlos del mensaje
-        if not event_details and data.get('message'):
-            message = data['message']
-            event_details = {
-                'texto': message.get('texto'),
-                'tipo_evento': message.get('tipo_evento'),
-                'nombre_archivo': message.get('nombre_archivo'),
-                'elemento_target': message.get('elemento_target')
-            }
-            print(f"[Backend] Detalles del evento extraídos del mensaje: {event_details}")
-        
-        print(f"[Backend] Detalles del evento finales: {event_details}")
-        
-        # Determinar acción y bloqueo según verify_policies
-        action = result.get('action', 'permitido')
-        blocked = action == 'bloqueado'
-        reason = result.get('info')
-        
-        # Preparar los datos del log
+        # Preparar datos del log
         log_data = {
             'user_id': user_id,
             'tenant_id': tenant_id,
             'domain': url,
             'url': url,
-            'timestamp': data.get('timestamp', datetime.now(timezone.utc).isoformat()),
-            'action': action,
-            'policy_info': reason,
-            'ip_address': data.get('ip_address'),
-            'user_agent': data.get('user_agent'),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'action': result['action'],
+            'policy_info': result['info'],
+            'ip_address': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent'),
             'tab_title': data.get('tab_title'),
             'time_on_page': data.get('time_on_page'),
             'open_tabs_count': data.get('open_tabs_count'),
             'tab_focused': data.get('tab_focused'),
-            'event_type': event_type,
-            'event_details': event_details,
-            'risk_score': data.get('risk_score', 10),
+            'event_type': data.get('event_type', 'navegacion'),
+            'event_details': data.get('event_details', {}),
+            'risk_score': calculate_risk_score(data.get('event_type', 'navegacion'), data.get('event_details', {})),
             'city': data.get('city'),
             'country': data.get('country')
         }
         
         print(f"[Backend] Registrando log con datos: {log_data}")
         
-        # Obtener conexión a Supabase con el token JWT
-        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token)
-        
-        # Insertar en la base de datos
-        result_db = user_supabase.table('navigation_logs').insert(log_data).execute()
-        
-        # Preparar la respuesta
-        response_data = {
-            'success': True,
-            'data': {
-                'action': action,
-                'blocked': blocked,
-                'reason': reason,
-                'details': event_details,
-                'event_type': event_type
-            }
-        }
+        # Registrar el log
+        user_supabase = get_supabase_with_jwt(request.headers.get('Authorization', '').replace('Bearer ', ''))
+        result = user_supabase.table('navigation_logs').insert(log_data).execute()
         
         print("[Backend] Log registrado exitosamente")
-        return jsonify(response_data)
-            
+        return jsonify({"success": True, "data": result.data})
+        
     except Exception as e:
-        print(f"[Backend] Error en create_navigation_log: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        print(f"[Backend] Error al registrar log: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 400
 
 def calculate_risk_score(event_type: str, event_details: dict) -> int:
     """Calcula el puntaje de riesgo basado en el tipo de evento y sus detalles"""
