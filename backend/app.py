@@ -1205,6 +1205,10 @@ def verify_policies(domain, tenant_id, role, user_id=None):
     try:
         print(f"[Backend] Verificando políticas para tenant_id: {tenant_id}, role: {role}, user_id: {user_id}")
         
+        # Obtener conexión a Supabase
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
         # Si no hay user_id, solo verificar políticas globales
         if not user_id:
             print("[Backend] No hay user_id, verificando solo políticas globales")
