@@ -818,10 +818,27 @@ def get_policies():
 
         else:
             print("[Backend] Obteniendo políticas para rol administrativo")
-            # Para client y admin, obtener todas las políticas del tenant
-            policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).execute()
+            # Para client y admin, obtener todas las políticas del tenant con información de grupos
+            policies = user_supabase.table('policies').select('*, groups(name)').eq('tenant_id', tenant_id).execute()
             print(f"[Backend] Políticas encontradas para tenant: {len(policies.data)}")
-            return jsonify({"success": True, "data": policies.data})
+            
+            # Procesar las políticas para incluir la información del grupo
+            processed_policies = []
+            for policy in policies.data:
+                processed_policy = {
+                    'id': policy['id'],
+                    'domain': policy['domain'],
+                    'action': policy['action'],
+                    'category': policy.get('category'),
+                    'block_reason': policy.get('block_reason'),
+                    'group_id': policy.get('group_id'),
+                    'group': policy.get('groups')
+                }
+                if processed_policy['group'] is None:
+                    del processed_policy['group']
+                processed_policies.append(processed_policy)
+            
+            return jsonify({"success": True, "data": processed_policies})
 
     except Exception as e:
         print(f"[Backend] Error en get_policies: {str(e)}")
