@@ -1210,8 +1210,13 @@ def verify_policies(domain, tenant_id, role, user_id=None):
         user_supabase = get_supabase_with_jwt(jwt_token)
         
         # Cargar sitios prohibidos
-        with open('backend/prohibidos.json', 'r', encoding='utf-8') as f:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        prohibidos_path = os.path.join(current_dir, 'prohibidos.json')
+        print(f"[Backend] Ruta del archivo de sitios prohibidos: {prohibidos_path}")
+        
+        with open(prohibidos_path, 'r', encoding='utf-8') as f:
             prohibited_sites = json.load(f)
+            print(f"[Backend] Se cargaron {len(prohibited_sites)} categorías de sitios prohibidos")
         
         # Verificar si el dominio está en la lista de prohibidos
         domain = domain.lower()
