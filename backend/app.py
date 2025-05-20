@@ -1209,6 +1209,20 @@ def verify_policies(domain, tenant_id, role, user_id=None):
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
         
+        # Cargar sitios prohibidos
+        with open('backend/prohibidos.json', 'r', encoding='utf-8') as f:
+            prohibited_sites = json.load(f)
+        
+        # Verificar si el dominio está en la lista de prohibidos
+        domain = domain.lower()
+        for category, sites in prohibited_sites.items():
+            for site in sites:
+                if site in domain:
+                    return {
+                        'action': 'bloqueado',
+                        'info': f'Sitio bloqueado por {category}'
+                    }
+        
         # Si no hay user_id, solo verificar políticas globales
         if not user_id:
             print("[Backend] No hay user_id, verificando solo políticas globales")
