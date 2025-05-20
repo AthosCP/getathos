@@ -81,8 +81,12 @@ function removeAllListeners() {
   window.removeEventListener('beforeprint', printHandler);
 }
 
+// Variable para controlar si el content script está activo
+let isActive = true;
+
 // Manejador de clicks
 function clickHandler(event: MouseEvent) {
+    if (!isActive) return;
     const target = event.target as HTMLElement;
     const elementInfo = getElementInfo(target);
     
@@ -100,6 +104,7 @@ function clickHandler(event: MouseEvent) {
 
 // Manejador de copia
 function copyHandler(event: ClipboardEvent) {
+    if (!isActive) return;
     const selection = window.getSelection();
     const selectedText = selection?.toString() || '';
     
@@ -120,6 +125,7 @@ function copyHandler(event: ClipboardEvent) {
 
 // Manejador de pegado
 function pasteHandler(event: ClipboardEvent) {
+    if (!isActive) return;
     const pastedText = event.clipboardData?.getData('text') || '';
     const target = event.target as HTMLElement;
     
@@ -219,4 +225,105 @@ chrome.storage.onChanged.addListener((changes, area) => {
 initialize();
 
 // Mensaje de inicialización
-console.log('Athos Content Script: Monitoreo de interacciones activo'); 
+console.log('Athos Content Script: Monitoreo de interacciones activo');
+
+// Escuchar mensajes del background script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'session_ended') {
+        console.log('[Athos] Sesión finalizada, desactivando content script');
+        isActive = false;
+        // Remover todos los event listeners
+        document.removeEventListener('click', clickHandler);
+        document.removeEventListener('copy', copyHandler);
+        document.removeEventListener('paste', pasteHandler);
+        document.removeEventListener('cut', cutHandler);
+        document.removeEventListener('change', changeHandler);
+        document.removeEventListener('keydown', handleKeyDown);
+        // Limpiar cualquier estado pendiente
+        clearTimeout(debounceTimer);
+    }
+});
+
+// Modificar las funciones de manejo de eventos para verificar si está activo
+function handleClick(event: MouseEvent) {
+    if (!isActive) return;
+    const target = event.target as HTMLElement;
+    const elementInfo = getElementInfo(target);
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'click',
+        elemento_target: elementInfo,
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: target.textContent?.trim().substring(0, 100) || null
+    };
+    
+    console.log('[Athos] Evento de click capturado:', eventData);
+    sendEventToBackground(eventData);
+}
+
+function handleCopy(event: ClipboardEvent) {
+    if (!isActive) return;
+    const selection = window.getSelection();
+    const selectedText = selection?.toString() || '';
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'copy',
+        elemento_target: {
+            tag: 'selection',
+            text: selectedText.substring(0, 100)
+        },
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: selectedText.substring(0, 100)
+    };
+    
+    console.log('[Athos] Evento de copia capturado:', eventData);
+    sendEventToBackground(eventData);
+}
+
+function handlePaste(event: ClipboardEvent) {
+    if (!isActive) return;
+    const pastedText = event.clipboardData?.getData('text') || '';
+    const target = event.target as HTMLElement;
+    
+    const eventData: UserInteractionEvent = {
+        tipo_evento: 'paste',
+        elemento_target: getElementInfo(target),
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href,
+        texto: pastedText.substring(0, 100)
+    };
+    
+    console.log('[Athos] Evento de pegado capturado:', eventData);
+    sendEventToBackground(eventData);
+}
+
+function handleCut(event: ClipboardEvent) {
+    if (!isActive) return;
+    const selection = window.getSelection();
+    const text = selection?.toString().substring(0, 100);
+    chrome.runtime.sendMessage({
+      type: 'user_interaction',
+      data: {
+        tipo_evento: 'cut',
+        elemento_target: {
+          tag: 'selection',
+          text: text
+        },
+        timestamp: new Date().toISOString(),
+        url_origen: window.location.href
+      }
+    });
+}
+
+function handleKeyDown(event: KeyboardEvent) {
+    if (!isActive) return;
+    // ... resto del código existente ...
+}
+
+// Modificar la función de registro de eventos para verificar si está activo
+function registerEvent(event: UserInteractionEvent) {
+    if (!isActive) return;
+    // ... resto del código existente ...
+} 

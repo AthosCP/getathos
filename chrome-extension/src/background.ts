@@ -259,10 +259,10 @@ async function isBlocked(url: string): Promise<boolean> {
     }
 
     // Verificar si la URL está bloqueada por el backend
-    if (data.data.blocked === true) {
+    if (data.data[0]?.action === 'bloqueado') {
       console.log(`[Athos] URL bloqueada por el backend:`, {
-        reason: data.data.reason,
-        details: data.data.details
+        reason: data.data[0].policy_info,
+        details: data.data[0]
       });
       return true;
     }
@@ -400,27 +400,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[Athos] Mensaje recibido del content script:', message);
     
     if (message.type === 'user_interaction') {
-        const eventDetails = {
-            texto: message.texto,
-            tipo_evento: message.tipo_evento,
-            nombre_archivo: message.nombre_archivo,
-            elemento_target: message.elemento_target
-        };
-        
-        console.log('[Athos] Detalles del evento procesados:', eventDetails);
-        
-        registerNavigation({
-            url: message.url_origen,
-            action: 'visitado',
-            eventType: 'navegacion',
-            eventDetails: eventDetails,
-            timestamp: message.timestamp,
-            hasToken: true
+        // Verificar si hay sesión activa antes de procesar la interacción
+        chrome.storage.local.get('jwt_token', async (result) => {
+            if (!result.jwt_token) {
+                console.log('[Athos] No hay sesión activa, ignorando interacción');
+                return;
+            }
+
+            const eventDetails = {
+                texto: message.texto,
+                tipo_evento: message.tipo_evento,
+                nombre_archivo: message.nombre_archivo,
+                elemento_target: message.elemento_target
+            };
+            
+            console.log('[Athos] Detalles del evento procesados:', eventDetails);
+            
+            await registerNavigation({
+                url: message.url_origen,
+                action: 'visitado',
+                eventType: 'navegacion',
+                eventDetails: eventDetails,
+                timestamp: message.timestamp,
+                hasToken: true
+            });
         });
     } else if (message.type === 'user_logout') {
         console.log('[Athos] Usuario ha cerrado sesión');
+        // Limpiar datos de sesión
         chrome.storage.local.remove(['jwt_token', 'policies'], () => {
             console.log('[Athos] Datos de sesión limpiados');
+            // Notificar a todas las pestañas que se cerró sesión
+            chrome.tabs.query({}, (tabs) => {
+                tabs.forEach(tab => {
+                    if (tab.id) {
+                        chrome.tabs.sendMessage(tab.id, { type: 'session_ended' })
+                            .catch(() => console.log('[Athos] No se pudo notificar a la pestaña:', tab.id));
+                    }
+                });
+            });
         });
     }
 });
