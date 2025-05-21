@@ -366,6 +366,18 @@
             Descargas
           </button>
           <button
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'content' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => activeTab = 'content'}
+          >
+            Contenido
+          </button>
+          <button
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => activeTab = 'geo'}
+          >
+            Geolocalización
+          </button>
+          <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'schedules' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
             on:click={() => activeTab = 'schedules'}
           >
@@ -387,6 +399,10 @@
                     Configuración de Sellos de Agua
                   {:else if activeTab === 'downloads'}
                     Control de Descargas
+                  {:else if activeTab === 'content'}
+                    Gestión de Contenido
+                  {:else if activeTab === 'geo'}
+                    Políticas de Geolocalización
                   {:else if activeTab === 'schedules'}
                     Políticas por Horario
                   {/if}
@@ -398,6 +414,10 @@
                     Define las marcas de agua que se aplicarán a los documentos sensibles.
                   {:else if activeTab === 'downloads'}
                     Establece restricciones y permisos para la descarga de archivos.
+                  {:else if activeTab === 'content'}
+                  Gestiona y visualiza quién copió información y dónde fue pegada dentro de tu organización.
+                  {:else if activeTab === 'geo'}
+                    Configura políticas de geolocalización para dispositivos móviles.
                   {:else if activeTab === 'schedules'}
                     Configura las políticas de acceso según el horario laboral.
                   {/if}
@@ -500,6 +520,10 @@
             <div class="p-6"><p>Configuración de Sello de Agua (Próximamente)</p></div>
           {:else if activeTab === 'downloads'}
             <div class="p-6"><p>Control de Descargas (Próximamente)</p></div>
+          {:else if activeTab === 'content'}
+            <div class="p-6"><p>Gestión de Contenido (Próximamente)</p></div>
+          {:else if activeTab === 'geo'}
+            <div class="p-6"><p>Políticas de Geolocalización (Próximamente)</p></div>
           {:else if activeTab === 'schedules'}
             <div class="p-6"><p>Políticas por Horario (Próximamente)</p></div>
           {/if}
