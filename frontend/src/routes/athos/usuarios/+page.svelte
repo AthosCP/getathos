@@ -68,16 +68,56 @@
     } catch (e) {}
   }
 
+  let isMounted = false;
+
   onMount(async () => {
     await fetchClientes();
+    // Initial data load
+    await fetchUsuarios({ // Added await here for consistency, though not strictly necessary if not chaining
+      email: filtroEmail,
+      role: filtroRol,
+      tenant_id: filtroCliente
+    });
+    isMounted = true; // Set isMounted after initial loads
   });
 
-  // Llamar a fetchUsuarios cada vez que cambian los filtros
-  $: fetchUsuarios({
-    email: filtroEmail,
-    role: filtroRol,
-    tenant_id: filtroCliente
-  });
+  // Debounce utility function
+  function debounce<T extends (...args: any[]) => void>(func: T, delay: number) {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    return function(this: ThisParameterType<T>, ...args: Parameters<T>) {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(this, args), delay);
+    };
+  }
+
+  // Debounced function for email filter changes
+  const debouncedFetchOnEmailChange = debounce(() => {
+    // No need to check isMounted here, as on:input implies the component is mounted and interactive.
+    fetchUsuarios({
+      email: filtroEmail, // filtroEmail is already updated by bind:value
+      role: filtroRol,
+      tenant_id: filtroCliente
+    });
+  }, 500); // 500ms delay
+
+  // Handler for email input changes
+  function handleEmailInputChange() {
+    // Value of filtroEmail is updated via bind:value.
+    // This handler just triggers the debounced fetch.
+    debouncedFetchOnEmailChange();
+  }
+
+  // Reactive statements for Role and Client filter changes (immediate fetch after mount)
+  // These will trigger if filtroRol or filtroCliente change respectively, after isMounted is true.
+  $: if (isMounted && filtroRol !== undefined) {
+    // console.log('Rol changed:', filtroRol); // Optional: for debugging
+    fetchUsuarios({ email: filtroEmail, role: filtroRol, tenant_id: filtroCliente });
+  }
+
+  $: if (isMounted && filtroCliente !== undefined) {
+    // console.log('Cliente changed:', filtroCliente); // Optional: for debugging
+    fetchUsuarios({ email: filtroEmail, role: filtroRol, tenant_id: filtroCliente });
+  }
 
   function openCreateModal() {
     editingUsuario = null;
@@ -208,7 +248,7 @@
                 <div class="flex flex-wrap gap-4 items-end">
                   <div>
                     <label class="block text-xs font-medium text-gray-700">Buscar por email</label>
-                    <input type="text" bind:value={filtroEmail} placeholder="Email" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                    <input type="text" bind:value={filtroEmail} on:input={handleEmailInputChange} placeholder="Email" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                   </div>
                   <div>
                     <label class="block text-xs font-medium text-gray-700">Rol</label>

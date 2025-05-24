@@ -28,6 +28,9 @@
   // Estado para datos de riesgo
   let riesgoData: RiesgoData[] = [];
   let loadingRiesgo = false;
+  let currentPageRiesgo = 1;
+  let totalPagesRiesgo = 1;
+  let pageSizeRiesgo = 20;
 
   // Categorías dinámicas
   let categorias: string[] = [];
@@ -87,6 +90,13 @@
   let currentPageGeo = 1;
   let totalPagesGeo = 1;
   let pageSizeGeo = 20;
+  // Data loaded flags
+  let centroDataLoaded = false;
+  let riesgoDataLoaded = false;
+  let bloqNetDataLoaded = false;
+  let comportamientoDataLoaded = false;
+  let geoDataLoaded = false;
+
   let selectedUserGeo = '';
   let selectedUbicacionGeo = '';
   let selectedEstadoGeo = '';
@@ -311,8 +321,8 @@
     if (selectedCategoriaRiesgo) params.append('category', selectedCategoriaRiesgo);
     if (dateFromRiesgo) params.append('date_from', dateFromRiesgo);
     if (dateToRiesgo) params.append('date_to', dateToRiesgo);
-    params.append('page', currentPageGeo.toString());
-    params.append('page_size', pageSizeGeo.toString());
+    params.append('page', currentPageRiesgo.toString());
+    params.append('page_size', pageSizeRiesgo.toString());
     
     try {
       const res = await fetch(`${API_URL}/api/navigation_logs/riesgo?${params.toString()}`, {
@@ -331,23 +341,23 @@
           categoria: typeof item.policy_info === 'object' && item.policy_info ? item.policy_info.category || '-' : '-',
           alerta: (item.risk_score || 0) > 80
         }));
-        totalPagesGeo = Math.ceil(data.total / pageSizeGeo);
+        totalPagesRiesgo = Math.ceil(data.total / pageSizeRiesgo);
       } else {
         riesgoData = [];
-        totalPagesGeo = 1;
+        totalPagesRiesgo = 1;
       }
     } catch (err) {
       console.error('Error cargando datos de riesgo:', err);
       riesgoData = [];
-      totalPagesGeo = 1;
+      totalPagesRiesgo = 1;
     } finally {
       loadingRiesgo = false;
     }
   }
 
-  function changePage(newPage: number) {
-    if (newPage >= 1 && newPage <= totalPagesGeo) {
-      currentPageGeo = newPage;
+  function changePageRiesgo(newPage: number) {
+    if (newPage >= 1 && newPage <= totalPagesRiesgo) {
+      currentPageRiesgo = newPage;
       loadRiesgoData();
     }
   }
@@ -462,7 +472,7 @@
   }
 
   async function filtrarRiesgo() {
-    currentPageGeo = 1;
+    currentPageRiesgo = 1; // Reset to page 1 on filter change for this tab
     await loadRiesgoData();
   }
 
@@ -471,19 +481,48 @@
     await loadTarjetas();
   }
 
+  function switchTab(newTab: Tab) {
+    activeTab = newTab;
+    if (newTab === 'centro' && !centroDataLoaded) {
+      loadAlertStats();
+      centroDataLoaded = true;
+    } else if (newTab === 'riesgo' && !riesgoDataLoaded) {
+      loadRiesgoData();
+      riesgoDataLoaded = true;
+    } else if (newTab === 'bloqueos' && !bloqNetDataLoaded) {
+      loadRegistros();
+      loadTarjetas(); // Assuming tarjetas are part of BloqNet
+      bloqNetDataLoaded = true;
+    } else if (newTab === 'comportamiento' && !comportamientoDataLoaded) {
+      loadComportamientoData();
+      comportamientoDataLoaded = true;
+    } else if (newTab === 'geo' && !geoDataLoaded) {
+      loadGeoData();
+      geoDataLoaded = true;
+    }
+  }
+
   onMount(async () => {
     if (!auth.token) {
       goto('/login');
       return;
     }
+    // Load prerequisites common to multiple tabs or global filters
     await loadCategorias();
     await loadUsers();
-    await loadRegistros();
-    await loadTarjetas();
-    await loadAlertStats();
-    await loadRiesgoData();
-    await loadComportamientoData();
-    await loadGeoData();
+
+    // Load data for the initially active tab
+    if (activeTab === 'centro') {
+      await loadAlertStats();
+      centroDataLoaded = true;
+    }
+    // Add similar blocks if other tabs can be initial, though 'centro' is default
+    // For example, if activeTab could be initialized to 'riesgo':
+    // else if (activeTab === 'riesgo') {
+    //   await loadRiesgoData();
+    //   riesgoDataLoaded = true;
+    // }
+    // etc. for other potential initial tabs.
   });
 </script>
 
@@ -495,13 +534,13 @@
       <h1 class="text-2xl font-bold text-gray-900">Centro de Alertas</h1>
     </div>
     <!-- Pestañas -->
-    <div class="border-b border-gray-200 mt-4">
+    <div class="border-b border-gray-200 mt-4 overflow-x-auto whitespace-nowrap">
       <nav class="-mb-px flex space-x-8">
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'centro' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'centro'}>Centro de Alertas</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'riesgo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'riesgo'}>RiesgoAct</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'bloqueos' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'bloqueos'}>BloqNet</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'comportamiento' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'comportamiento'}>ComportGuard</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'geo'}>GeoAlerta</button>
+        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'centro' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('centro')}>Centro de Alertas</button>
+        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'riesgo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('riesgo')}>RiesgoAct</button>
+        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'bloqueos' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('bloqueos')}>BloqNet</button>
+        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'comportamiento' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('comportamiento')}>ComportGuard</button>
+        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('geo')}>GeoAlerta</button>
       </nav>
     </div>
 
@@ -781,16 +820,16 @@
             <div class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
               <div class="flex-1 flex justify-between sm:hidden">
                 <button
-                  on:click={() => changePage(currentPageGeo - 1)}
-                  disabled={currentPageGeo === 1}
-                  class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 {currentPageGeo === 1 ? 'opacity-50 cursor-not-allowed' : ''}"
+                  on:click={() => changePageRiesgo(currentPageRiesgo - 1)}
+                  disabled={currentPageRiesgo === 1}
+                  class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 {currentPageRiesgo === 1 ? 'opacity-50 cursor-not-allowed' : ''}"
                 >
                   Anterior
                 </button>
                 <button
-                  on:click={() => changePage(currentPageGeo + 1)}
-                  disabled={currentPageGeo === totalPagesGeo}
-                  class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 {currentPageGeo === totalPagesGeo ? 'opacity-50 cursor-not-allowed' : ''}"
+                  on:click={() => changePageRiesgo(currentPageRiesgo + 1)}
+                  disabled={currentPageRiesgo === totalPagesRiesgo}
+                  class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 {currentPageRiesgo === totalPagesRiesgo ? 'opacity-50 cursor-not-allowed' : ''}"
                 >
                   Siguiente
                 </button>
@@ -798,34 +837,34 @@
               <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                 <div>
                   <p class="text-sm text-gray-700">
-                    Mostrando página <span class="font-medium">{currentPageGeo}</span> de <span class="font-medium">{totalPagesGeo}</span>
+                    Mostrando página <span class="font-medium">{currentPageRiesgo}</span> de <span class="font-medium">{totalPagesRiesgo}</span>
                   </p>
                 </div>
                 <div>
                   <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                     <button
-                      on:click={() => changePage(currentPageGeo - 1)}
-                      disabled={currentPageGeo === 1}
-                      class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 {currentPageGeo === 1 ? 'opacity-50 cursor-not-allowed' : ''}"
+                      on:click={() => changePageRiesgo(currentPageRiesgo - 1)}
+                      disabled={currentPageRiesgo === 1}
+                      class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 {currentPageRiesgo === 1 ? 'opacity-50 cursor-not-allowed' : ''}"
                     >
                       <span class="sr-only">Anterior</span>
                       <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                         <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
                       </svg>
                     </button>
-                    {#each Array(Math.min(5, totalPagesGeo)) as _, i}
+                    {#each Array(Math.min(5, totalPagesRiesgo)) as _, i}
                       {@const pageNum = i + 1}
                       <button
-                        on:click={() => changePage(pageNum)}
-                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium {pageNum === currentPageGeo ? 'text-indigo-600 bg-indigo-50' : 'text-gray-700 hover:bg-gray-50'}"
+                        on:click={() => changePageRiesgo(pageNum)}
+                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium {pageNum === currentPageRiesgo ? 'text-indigo-600 bg-indigo-50' : 'text-gray-700 hover:bg-gray-50'}"
                       >
                         {pageNum}
                       </button>
                     {/each}
                     <button
-                      on:click={() => changePage(currentPageGeo + 1)}
-                      disabled={currentPageGeo === totalPagesGeo}
-                      class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 {currentPageGeo === totalPagesGeo ? 'opacity-50 cursor-not-allowed' : ''}"
+                      on:click={() => changePageRiesgo(currentPageRiesgo + 1)}
+                      disabled={currentPageRiesgo === totalPagesRiesgo}
+                      class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 {currentPageRiesgo === totalPagesRiesgo ? 'opacity-50 cursor-not-allowed' : ''}"
                     >
                       <span class="sr-only">Siguiente</span>
                       <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
