@@ -547,12 +547,12 @@
     {:else if activeTab === 'historial'}
       <h2 class="text-xl font-semibold mb-2">Historial Completo de Navegación</h2>
       <!-- Filtros -->
-      <div class="flex flex-wrap gap-4 mb-6 items-end">
-        <div>
+      <div class="flex flex-wrap md:flex-nowrap gap-4 mb-6 items-end">
+        <div class="min-w-[140px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">Usuario</label>
           <select 
             bind:value={userId} 
-            class="border rounded px-3 py-2 min-w-[150px]"
+            class="border rounded px-3 py-2 w-full"
             on:change={filtrar}
           >
             <option value="">Todos</option>
@@ -561,7 +561,7 @@
             {/each}
           </select>
         </div>
-        <div>
+        <div class="min-w-[160px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">Dominio</label>
           <div class="relative domain-suggestions">
             <input 
@@ -570,7 +570,7 @@
               on:input={(e) => fetchDomainSuggestions((e.target as HTMLInputElement).value)}
               on:focus={() => showDomainSuggestions = true}
               on:blur={() => setTimeout(() => showDomainSuggestions = false, 200)}
-              class="border rounded px-3 py-2 min-w-[200px]"
+              class="border rounded px-3 py-2 w-full"
               placeholder="ejemplo.com"
             />
             {#if showDomainSuggestions && domainSuggestions.length > 0}
@@ -591,7 +591,7 @@
             {/if}
           </div>
         </div>
-        <div>
+        <div class="min-w-[180px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">URL</label>
           <div class="relative url-suggestions">
             <input 
@@ -600,7 +600,7 @@
               on:input={(e) => fetchUrlSuggestions((e.target as HTMLInputElement).value)}
               on:focus={() => showUrlSuggestions = true}
               on:blur={() => setTimeout(() => showUrlSuggestions = false, 200)}
-              class="border rounded px-3 py-2 min-w-[200px]"
+              class="border rounded px-3 py-2 w-full"
               placeholder="https://ejemplo.com/ruta"
             />
             {#if showUrlSuggestions && urlSuggestions.length > 0}
@@ -621,29 +621,29 @@
             {/if}
           </div>
         </div>
-        <div>
+        <div class="min-w-[120px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">Desde</label>
           <input 
             type="date" 
             bind:value={dateFrom} 
-            class="border rounded px-3 py-2 min-w-[120px]"
+            class="border rounded px-3 py-2 w-full"
             on:change={filtrar}
           />
         </div>
-        <div>
+        <div class="min-w-[120px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">Hasta</label>
           <input 
             type="date" 
             bind:value={dateTo} 
-            class="border rounded px-3 py-2 min-w-[120px]"
+            class="border rounded px-3 py-2 w-full"
             on:change={filtrar}
           />
         </div>
-        <div>
+        <div class="min-w-[120px] flex-1">
           <label class="block text-xs font-medium text-gray-700 mb-1">Acción</label>
           <select 
             bind:value={action} 
-            class="border rounded px-3 py-2 min-w-[120px]"
+            class="border rounded px-3 py-2 w-full"
             on:change={filtrar}
           >
             <option value="all">Todas</option>
@@ -651,7 +651,7 @@
             <option value="permitido">Permitido</option>
           </select>
         </div>
-        <div class="flex flex-row gap-2 md:ml-auto mt-2 md:mt-0">
+        <div class="flex flex-row gap-2 md:ml-2 mt-2 md:mt-0 min-w-[120px]">
           <button class="px-4 py-2 rounded bg-indigo-600 text-white font-semibold w-full md:w-auto" on:click={filtrar}>Filtrar</button>
         </div>
       </div>
@@ -681,7 +681,9 @@
                 {#each logs as log}
                   <tr class="bg-white border-b hover:bg-gray-50">
                     <td class="px-4 py-4 whitespace-nowrap">{users.find(u => u.id === log.user_id)?.email || log.user_id}</td>
-                    <td class="px-4 py-4 whitespace-nowrap">{log.domain}</td>
+                    <td class="px-4 py-4 whitespace-nowrap max-w-xs break-all">
+                      <div class="truncate" title={log.domain}>{log.domain}</div>
+                    </td>
                     <td class="px-4 py-4 whitespace-nowrap truncate max-w-[200px]" title={log.url}>{log.url}</td>
                     <td class="px-4 py-4 whitespace-nowrap">
                       <span class="px-2 py-1 text-xs font-semibold rounded-full {log.action === 'bloqueado' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">

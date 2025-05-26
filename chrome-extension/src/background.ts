@@ -51,15 +51,25 @@ interface UserInteractionEvent {
 let policies: Policy[] = [];
 let tabTimers: Map<number, { startTime: number, timer: number }> = new Map();
 
-// Obtener IP pública
-async function getPublicIP(): Promise<string | undefined> {
+// Obtener IP pública y ubicación
+async function getPublicIPAndLocation(): Promise<{ip: string, city?: string, country?: string}> {
   try {
     const response = await fetch('https://api.ipify.org?format=json');
     const data = await response.json();
-    return data.ip;
+    const ip = data.ip;
+    
+    // Obtener ubicación
+    const locationResponse = await fetch(`https://ipinfo.io/${ip}/json`);
+    const locationData = await locationResponse.json();
+    
+    return {
+      ip,
+      city: locationData.city,
+      country: locationData.country
+    };
   } catch (e) {
-    console.error('Error fetching IP:', e);
-    return undefined;
+    console.error('Error fetching IP and location:', e);
+    return { ip: '' };
   }
 }
 
@@ -294,6 +304,14 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
     console.log(`[Athos] Resultado de verificación: ${isUrlBlocked ? 'BLOQUEADA' : 'PERMITIDA'}`);
 
     if (isUrlBlocked) {
+      // Registrar el intento de acceso bloqueado
+      await registerNavigation({
+        url: url,
+        action: 'bloqueado',
+        eventType: 'navegacion',
+        eventDetails: { motivo: 'Bloqueado por política' },
+        hasToken: true
+      });
       console.log(`[Athos] Redirigiendo a página de bloqueo...`);
       redirectToBlocked(details.tabId, url);
       chrome.notifications.create({
@@ -314,9 +332,15 @@ chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.type === 'main_frame' && details.method === 'POST') {
       const url = details.url;
-      registerNavigation(url, 'formulario_enviado', 'formulario', {
-        method: details.method,
-        form_data: details.requestBody
+      registerNavigation({
+        url: url,
+        action: 'formulario_enviado',
+        eventType: 'formulario',
+        eventDetails: {
+          method: details.method,
+          form_data: details.requestBody
+        },
+        hasToken: true
       });
     }
     return { cancel: false };
@@ -330,10 +354,16 @@ if (chrome.downloads) {
   chrome.downloads.onCreated.addListener(async (downloadItem) => {
     try {
       const url = downloadItem.url;
-      await registerNavigation(url, 'descarga_iniciada', 'descarga', {
-        filename: downloadItem.filename,
-        file_size: downloadItem.fileSize,
-        mime_type: downloadItem.mime
+      await registerNavigation({
+        url: url,
+        action: 'descarga_iniciada',
+        eventType: 'descarga',
+        eventDetails: {
+          filename: downloadItem.filename,
+          file_size: downloadItem.fileSize,
+          mime_type: downloadItem.mime
+        },
+        hasToken: true
       });
     } catch (error) {
       console.error('Error al registrar descarga:', error);
@@ -476,27 +506,56 @@ async function registerNavigation(data: {
             return;
         }
 
+        // Obtener IP y ubicación
+        const { ip, city, country } = await getPublicIPAndLocation();
+
+        // Mapear eventType a los valores aceptados por la base de datos
+        const eventTypeMap: Record<string, string> = {
+            'navegacion': 'navegacion',
+            'click': 'click',
+            'copy': 'copy',
+            'paste': 'paste',
+            'download': 'download',
+            'file_upload': 'file_upload',
+            'cut': 'cut',
+            'print': 'print',
+            'bloqueo': 'navegacion',
+            'formulario': 'navegacion'
+        };
+        const safeEventType = eventTypeMap[data.eventType] || 'navegacion';
+
         const eventData = {
             url: data.url,
+            domain: (() => { try { return new URL(data.url).hostname; } catch { return ''; } })(),
             action: data.action,
-            event_type: data.eventType,
+            event_type: safeEventType,
             event_details: data.eventDetails,
             timestamp: data.timestamp || new Date().toISOString(),
-            ip_address: null,
+            ip_address: ip,
+            city: city,
+            country: country,
             user_agent: navigator.userAgent,
             tab_title: null,
             time_on_page: 0,
             open_tabs_count: 0,
             tab_focused: true,
-            risk_score: 10
+            risk_score: calculateRiskScore(safeEventType, data.eventDetails)
         };
 
         console.log('[Athos] Enviando evento a la API:', {
             endpoint: `${API_URL}/api/navigation_logs`,
             eventType: data.eventType,
             eventDetails: data.eventDetails,
-            timestamp: eventData.timestamp
+            timestamp: eventData.timestamp,
+            location: { city, country }
         });
+
+        console.log('[Athos] Objeto REAL enviado a la API:', eventData);
+
+        if (!eventData.domain) {
+            console.error('[Athos] Dominio vacío, no se enviará el registro:', eventData);
+            return;
+        }
 
         const response = await fetch(`${API_URL}/api/navigation_logs`, {
             method: 'POST',

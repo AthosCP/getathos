@@ -3,11 +3,25 @@
   import { onMount } from 'svelte';
   import { auth } from '$lib/auth';
   import { API_URL } from '$lib/config';
+  import { page } from '$app/stores';
 
   let email = '';
   let password = '';
   let error = '';
   let loading = false;
+  let redirectPath = '';
+
+  onMount(() => {
+    auth.init();
+    redirectPath = $page.url.searchParams.get('redirect') || '';
+    if (auth.user) {
+      if (redirectPath) {
+        goto(redirectPath);
+      } else if (auth.user.role === 'admin') goto('/admin/dashboard');
+      else if (auth.user.role === 'client') goto('/dashboard');
+      else if (auth.user.role === 'athos_owner') goto('/athos/dashboard');
+    }
+  });
 
   async function handleSubmit() {
     error = '';
@@ -34,7 +48,9 @@
           role: data.role
         }, data.access_token);
         
-        if (data.role === 'admin') {
+        if (redirectPath) {
+          goto(redirectPath);
+        } else if (data.role === 'admin') {
           goto('/admin/dashboard');
         } else if (data.role === 'client') {
           goto('/dashboard');
@@ -52,15 +68,6 @@
       loading = false;
     }
   }
-
-  onMount(() => {
-    auth.init();
-    if (auth.user) {
-      if (auth.user.role === 'admin') goto('/admin/dashboard');
-      else if (auth.user.role === 'client') goto('/dashboard');
-      else if (auth.user.role === 'athos_owner') goto('/athos/dashboard');
-    }
-  });
 </script>
 
 <div class="min-h-screen flex items-center justify-center bg-black py-12 px-4 sm:px-6 lg:px-8">

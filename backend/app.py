@@ -968,7 +968,18 @@ def update_policy(policy_id_str): # Usar policy_id_str
         if 'action' in data and data['action'] is not None:
             if data['action'] not in ['allow', 'block']:
                 return jsonify({"error": "Acción inválida"}), 400
-            update_payload['action'] = data['action']
+            # Mapear acciones a los valores aceptados por la base de datos
+            action_map = {
+                'block': 'bloqueado',
+                'bloqueo': 'bloqueado',
+                'allow': 'permitido',
+                'permitir': 'permitido',
+                'visit': 'visitado',
+                'visitado': 'visitado',
+                'interact': 'interaccion',
+                'interaccion': 'interaccion'
+            }
+            update_payload['action'] = action_map.get(data['action'], data['action'])
 
         new_group_id = data.get('group_id') # Puede ser un UUID string, o None/null para desasociar
         new_tenant_id_str = data.get('tenant_id') # Admin podría querer cambiar el tenant_id
@@ -1204,20 +1215,13 @@ def get_navigation_logs():
 def verify_policies(domain, tenant_id, role, user_id=None):
     try:
         print(f"[Backend] Verificando políticas para tenant_id: {tenant_id}, role: {role}, user_id: {user_id}")
-        
-        # Obtener conexión a Supabase
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
-        
         # Cargar sitios prohibidos
         current_dir = os.path.dirname(os.path.abspath(__file__))
         prohibidos_path = os.path.join(current_dir, 'prohibidos.json')
-        print(f"[Backend] Ruta del archivo de sitios prohibidos: {prohibidos_path}")
-        
         with open(prohibidos_path, 'r', encoding='utf-8') as f:
             prohibited_sites = json.load(f)
-            print(f"[Backend] Se cargaron {len(prohibited_sites)} categorías de sitios prohibidos")
-        
         # Verificar si el dominio está en la lista de prohibidos
         domain = domain.lower()
         for category, sites in prohibited_sites.items():
@@ -1225,36 +1229,38 @@ def verify_policies(domain, tenant_id, role, user_id=None):
                 if site in domain:
                     return {
                         'action': 'bloqueado',
-                        'info': f'Sitio bloqueado por {category}'
+                        'info': {
+                            'category': category,
+                            'block_reason': f'Sitio bloqueado por {category}'
+                        }
                     }
-        
         # Si no hay user_id, solo verificar políticas globales
         if not user_id:
-            print("[Backend] No hay user_id, verificando solo políticas globales")
             policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
-            print(f"[Backend] Políticas globales encontradas: {len(policies.data)}")
-            
             for policy in policies.data:
                 if policy['domain'] in domain:
                     return {
                         'action': policy['action'],
-                        'info': policy
+                        'info': {
+                            'category': policy.get('category', 'sin categoría'),
+                            'block_reason': policy.get('block_reason', 'Bloqueado por política personalizada')
+                        }
                     }
             return {'action': 'permitido', 'info': None}
-        
         # Si hay user_id, verificar políticas específicas del usuario
         user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
         user_groups = [group['group_id'] for group in user_groups_res.data]
-        
         # Verificar políticas globales primero
         global_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
         for policy in global_policies.data:
             if policy['domain'] in domain:
                 return {
                     'action': policy['action'],
-                    'info': policy
+                    'info': {
+                        'category': policy.get('category', 'sin categoría'),
+                        'block_reason': policy.get('block_reason', 'Bloqueado por política personalizada')
+                    }
                 }
-        
         # Luego verificar políticas de grupos
         if user_groups:
             group_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).in_('group_id', user_groups).execute()
@@ -1262,14 +1268,15 @@ def verify_policies(domain, tenant_id, role, user_id=None):
                 if policy['domain'] in domain:
                     return {
                         'action': policy['action'],
-                        'info': policy
+                        'info': {
+                            'category': policy.get('category', 'sin categoría'),
+                            'block_reason': policy.get('block_reason', 'Bloqueado por política personalizada')
+                        }
                     }
-        
         return {'action': 'permitido', 'info': None}
-        
     except Exception as e:
         print(f"[Backend] Error al verificar políticas: {str(e)}")
-        return {'action': 'permitido', 'info': str(e)}
+        return {'action': 'bloqueado', 'info': {'category': 'error', 'block_reason': 'Error al verificar políticas'}}
 
 @app.route('/api/navigation_logs', methods=['POST'])
 @jwt_required()
@@ -1294,8 +1301,26 @@ def create_navigation_log():
         
         # Verificar políticas
         print(f"[Backend] Verificando políticas para dominio: {url}")
-        result = verify_policies(domain, tenant_id, role, user_id)
-        print(f"[Backend] Resultado de verify_policies: {result}")
+        policy_result = verify_policies(domain, tenant_id, role, user_id)
+        print(f"[Backend] Resultado de verify_policies: {policy_result}")
+        action = policy_result.get('action', 'visitado')
+        # Mapear acciones a los valores aceptados por la base de datos
+        action_map = {
+            'block': 'bloqueado',
+            'bloqueo': 'bloqueado',
+            'allow': 'permitido',
+            'permitir': 'permitido',
+            'visit': 'visitado',
+            'visitado': 'visitado',
+            'interact': 'interaccion',
+            'interaccion': 'interaccion'
+        }
+        action = action_map.get(action, action)
+        policy_info = policy_result.get('info', {})
+        if isinstance(policy_info, dict):
+            policy_info = json.dumps(policy_info)
+        else:
+            policy_info = json.dumps({'block_reason': policy_info})
         
         # Preparar datos del log
         log_data = {
@@ -1304,8 +1329,8 @@ def create_navigation_log():
             'domain': url,
             'url': url,
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'action': result['action'],
-            'policy_info': result['info'],
+            'action': action,
+            'policy_info': policy_info,
             'ip_address': request.remote_addr,
             'user_agent': request.headers.get('User-Agent'),
             'tab_title': data.get('tab_title'),
@@ -2241,7 +2266,8 @@ def get_comport_navigation_logs():
         user_domains = {}
         for log in reversed(logs):  # Procesar en orden cronológico
             uid = log.get('user_id')
-            dom = log.get('domain')
+            # Normalizar dominio base
+            dom = normalize_domain(log.get('domain') or log.get('url') or '')
             hora = log.get('timestamp')
             if not uid or not dom:
                 continue
@@ -2330,50 +2356,93 @@ def get_geo_navigation_logs():
         page = int(request.args.get('page', 1))
         page_size = int(request.args.get('page_size', 20))
 
-        # Obtener logs de navegación filtrados
+        # Construir query base
         base_query = user_supabase.table('navigation_logs').select('*')
-        if role == 'admin':
-            pass
-        elif role == 'client':
+        
+        # Aplicar filtros de tenant y usuario
+        if role == 'client':
             base_query = base_query.eq('tenant_id', tenant_id)
-        else:
+        elif role != 'admin':
             return jsonify({"error": "No autorizado"}), 403
+            
         if user_id:
             base_query = base_query.eq('user_id', user_id)
         if date_from:
             base_query = base_query.gte('timestamp', date_from)
         if date_to:
             base_query = base_query.lte('timestamp', date_to)
-        logs = base_query.order('timestamp', desc=True).limit(1000).execute().data
+            
+        # Aplicar filtros de ubicación si existen
+        if pais:
+            base_query = base_query.ilike('country', f'%{pais}%')
+        if ciudad:
+            base_query = base_query.ilike('city', f'%{ciudad}%')
 
-        # Lógica para determinar IP habitual/no habitual
+        # Obtener total de registros
+        count_query = user_supabase.table('navigation_logs').select('*', count='exact')
+        if role == 'client':
+            count_query = count_query.eq('tenant_id', tenant_id)
+        if user_id:
+            count_query = count_query.eq('user_id', user_id)
+        if date_from:
+            count_query = count_query.gte('timestamp', date_from)
+        if date_to:
+            count_query = count_query.lte('timestamp', date_to)
+        if pais:
+            count_query = count_query.ilike('country', f'%{pais}%')
+        if ciudad:
+            count_query = count_query.ilike('city', f'%{ciudad}%')
+            
+        count_result = count_query.execute()
+        total = count_result.count if hasattr(count_result, 'count') else 0
+
+        # Obtener datos paginados
+        logs = base_query.order('timestamp', desc=True).range(
+            (page - 1) * page_size,
+            page * page_size - 1
+        ).execute().data
+
+        # Procesar logs para determinar IPs habituales
         eventos = []
         user_ips = {}
-        for log in reversed(logs):  # Procesar en orden cronológico
+        
+        # Primero obtener todas las IPs históricas para cada usuario
+        if estado in ['habitual', 'no_habitual']:
+            historical_ips = user_supabase.table('navigation_logs')\
+                .select('user_id,ip_address')\
+                .order('timestamp', desc=True)\
+                .limit(1000)\
+                .execute().data
+            
+            for log in historical_ips:
+                uid = log.get('user_id')
+                ip = log.get('ip_address')
+                if uid and ip:
+                    if uid not in user_ips:
+                        user_ips[uid] = set()
+                    user_ips[uid].add(ip)
+
+        # Procesar los logs de la página actual
+        for log in logs:
             uid = log.get('user_id')
             ip = log.get('ip_address')
-            ciudad_val = log.get('city') or log.get('ciudad') or log.get('location', {}).get('city')
-            pais_val = log.get('country') or log.get('pais') or log.get('location', {}).get('country')
+            ciudad_val = log.get('city')
+            pais_val = log.get('country')
             hora = log.get('timestamp')
+            
             if not uid or not ip:
                 continue
-            # Enriquecer al vuelo si falta ciudad o país
-            if (not ciudad_val or not pais_val):
-                try:
-                    ipinfo_url = f'https://ipinfo.io/{ip}/json'
-                    ipinfo_res = requests.get(ipinfo_url, timeout=2)
-                    if ipinfo_res.status_code == 200:
-                        ipinfo_data = ipinfo_res.json()
-                        ciudad_val = ciudad_val or ipinfo_data.get('city')
-                        pais_val = pais_val or ipinfo_data.get('country')
-                except Exception as e:
-                    print(f"Error consultando ipinfo.io al vuelo: {e}")
-            if uid not in user_ips:
-                user_ips[uid] = set()
+
+            # Determinar si es IP habitual
             alerta = False
-            if ip not in user_ips[uid]:
-                alerta = True  # IP no habitual
-                user_ips[uid].add(ip)
+            if estado in ['habitual', 'no_habitual']:
+                if uid in user_ips and ip not in user_ips[uid]:
+                    alerta = True
+            elif estado == 'habitual':
+                continue
+            elif estado == 'no_habitual':
+                continue
+
             evento = {
                 'usuario': uid,
                 'ip': ip,
@@ -2383,29 +2452,10 @@ def get_geo_navigation_logs():
                 'alerta': alerta
             }
             eventos.append(evento)
-        # Filtros adicionales
-        if pais:
-            eventos = [e for e in eventos if e['pais'] == pais]
-        if ciudad:
-            eventos = [e for e in eventos if e['ciudad'] == ciudad]
-        if estado == 'habitual':
-            eventos = [e for e in eventos if not e['alerta']]
-        if estado == 'no_habitual':
-            eventos = [e for e in eventos if e['alerta']]
-        if user_id:
-            eventos = [e for e in eventos if e['usuario'] == user_id]
-        if date_from:
-            eventos = [e for e in eventos if e['hora'] >= date_from]
-        if date_to:
-            eventos = [e for e in eventos if e['hora'] <= date_to]
-        eventos = sorted(eventos, key=lambda x: x['hora'], reverse=True)
-        total = len(eventos)
-        start = (page - 1) * page_size
-        end = start + page_size
-        data = eventos[start:end]
+
         return jsonify({
             'success': True,
-            'data': data,
+            'data': eventos,
             'total': total,
             'page': page,
             'page_size': page_size

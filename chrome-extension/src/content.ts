@@ -27,12 +27,12 @@ function getElementInfo(element: HTMLElement): { tag: string; id?: string; class
 }
 
 // Función para enviar evento al background
-function sendEventToBackground(eventData: any) {
+function sendEventToBackground(eventData: UserInteractionEvent) {
     console.log("[Athos] Enviando evento al background:", eventData);
     try {
         chrome.runtime.sendMessage({
             type: 'user_interaction',
-            ...eventData
+            data: eventData
         }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn("[Athos] Error al enviar mensaje:", chrome.runtime.lastError.message);
@@ -41,7 +41,7 @@ function sendEventToBackground(eventData: any) {
                     console.log("[Athos] Intentando reconectar...");
                     setTimeout(() => {
                         sendEventToBackground(eventData);
-                    }, 1000); // Reintentar después de 1 segundo
+                    }, 1000);
                 }
                 return;
             }
@@ -54,39 +54,40 @@ function sendEventToBackground(eventData: any) {
             console.log("[Athos] Intentando reconectar...");
             setTimeout(() => {
                 sendEventToBackground(eventData);
-            }, 1000); // Reintentar después de 1 segundo
+            }, 1000);
         }
     }
 }
 
-// Variable para controlar el estado de autenticación
+// Variables de control
 let isAuthenticated = false;
+let isActive = true;
+let debounceTimer: number;
 
 // Función para verificar autenticación
 async function checkAuth() {
-  const { jwt_token } = await chrome.storage.local.get('jwt_token');
-  isAuthenticated = !!jwt_token;
-  if (!isAuthenticated) {
-    removeAllListeners();
-  }
+    const { jwt_token } = await chrome.storage.local.get('jwt_token');
+    isAuthenticated = !!jwt_token;
+    if (!isAuthenticated) {
+        removeAllListeners();
+    }
 }
 
 // Función para remover todos los listeners
 function removeAllListeners() {
-  document.removeEventListener('click', clickHandler);
-  document.removeEventListener('copy', copyHandler);
-  document.removeEventListener('paste', pasteHandler);
-  document.removeEventListener('change', changeHandler);
-  document.removeEventListener('cut', cutHandler);
-  window.removeEventListener('beforeprint', printHandler);
+    document.removeEventListener('click', clickHandler);
+    document.removeEventListener('copy', copyHandler);
+    document.removeEventListener('paste', pasteHandler);
+    document.removeEventListener('change', changeHandler);
+    document.removeEventListener('cut', cutHandler);
+    document.removeEventListener('keydown', handleKeyDown);
+    document.removeEventListener('click', downloadHandler);
+    window.removeEventListener('beforeprint', printHandler);
 }
-
-// Variable para controlar si el content script está activo
-let isActive = true;
 
 // Manejador de clicks
 function clickHandler(event: MouseEvent) {
-    if (!isActive) return;
+    if (!isActive || !isAuthenticated) return;
     const target = event.target as HTMLElement;
     const elementInfo = getElementInfo(target);
     
@@ -95,7 +96,7 @@ function clickHandler(event: MouseEvent) {
         elemento_target: elementInfo,
         timestamp: new Date().toISOString(),
         url_origen: window.location.href,
-        texto: target.textContent?.trim().substring(0, 100) || null
+        texto: target.textContent?.trim().substring(0, 100) || undefined
     };
     
     console.log('[Athos] Evento de click capturado:', eventData);
@@ -104,7 +105,7 @@ function clickHandler(event: MouseEvent) {
 
 // Manejador de copia
 function copyHandler(event: ClipboardEvent) {
-    if (!isActive) return;
+    if (!isActive || !isAuthenticated) return;
     const selection = window.getSelection();
     const selectedText = selection?.toString() || '';
     
@@ -125,7 +126,7 @@ function copyHandler(event: ClipboardEvent) {
 
 // Manejador de pegado
 function pasteHandler(event: ClipboardEvent) {
-    if (!isActive) return;
+    if (!isActive || !isAuthenticated) return;
     const pastedText = event.clipboardData?.getData('text') || '';
     const target = event.target as HTMLElement;
     
@@ -141,134 +142,36 @@ function pasteHandler(event: ClipboardEvent) {
     sendEventToBackground(eventData);
 }
 
-function changeHandler(e: Event) {
-  if (!isAuthenticated) return;
-  const target = e.target as HTMLInputElement;
-  if (target.type === 'file') {
-    const files = Array.from(target.files || []);
-    files.forEach(file => {
-      chrome.runtime.sendMessage({
-        type: 'user_interaction',
-        data: {
-          tipo_evento: 'file_upload',
-          elemento_target: getElementInfo(target),
-          nombre_archivo: file.name,
-          timestamp: new Date().toISOString(),
-          url_origen: window.location.href
-        }
-      });
-    });
-  }
-}
-
-function cutHandler() {
-  if (!isAuthenticated) return;
-  const selection = window.getSelection();
-  const text = selection?.toString().substring(0, 100);
-  chrome.runtime.sendMessage({
-    type: 'user_interaction',
-    data: {
-      tipo_evento: 'cut',
-      elemento_target: {
-        tag: 'selection',
-        text: text
-      },
-      timestamp: new Date().toISOString(),
-      url_origen: window.location.href
-    }
-  });
-}
-
-function printHandler() {
-  if (!isAuthenticated) return;
-  chrome.runtime.sendMessage({
-    type: 'user_interaction',
-    data: {
-      tipo_evento: 'print',
-      elemento_target: { tag: 'window' },
-      timestamp: new Date().toISOString(),
-      url_origen: window.location.href
-    }
-  });
-}
-
-// Agregar listeners
-function addAllListeners() {
-  document.addEventListener('click', clickHandler);
-  document.addEventListener('copy', copyHandler);
-  document.addEventListener('paste', pasteHandler);
-  document.addEventListener('change', changeHandler);
-  document.addEventListener('cut', cutHandler);
-  window.addEventListener('beforeprint', printHandler);
-}
-
-// Inicialización
-async function initialize() {
-  await checkAuth();
-  if (isAuthenticated) {
-    addAllListeners();
-  }
-}
-
-// Escuchar cambios en el storage
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.jwt_token) {
-    checkAuth().then(() => {
-      if (isAuthenticated) {
-        addAllListeners();
-      }
-    });
-  }
-});
-
-// Iniciar
-initialize();
-
-// Mensaje de inicialización
-console.log('Athos Content Script: Monitoreo de interacciones activo');
-
-// Escuchar mensajes del background script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'session_ended') {
-        console.log('[Athos] Sesión finalizada, desactivando content script');
-        isActive = false;
-        // Remover todos los event listeners
-        document.removeEventListener('click', clickHandler);
-        document.removeEventListener('copy', copyHandler);
-        document.removeEventListener('paste', pasteHandler);
-        document.removeEventListener('cut', cutHandler);
-        document.removeEventListener('change', changeHandler);
-        document.removeEventListener('keydown', handleKeyDown);
-        // Limpiar cualquier estado pendiente
-        clearTimeout(debounceTimer);
-    }
-});
-
-// Modificar las funciones de manejo de eventos para verificar si está activo
-function handleClick(event: MouseEvent) {
-    if (!isActive) return;
-    const target = event.target as HTMLElement;
-    const elementInfo = getElementInfo(target);
+// Manejador de cambios (file upload)
+function changeHandler(event: Event) {
+    if (!isActive || !isAuthenticated) return;
+    const target = event.target as HTMLInputElement;
     
-    const eventData: UserInteractionEvent = {
-        tipo_evento: 'click',
-        elemento_target: elementInfo,
-        timestamp: new Date().toISOString(),
-        url_origen: window.location.href,
-        texto: target.textContent?.trim().substring(0, 100) || null
-    };
-    
-    console.log('[Athos] Evento de click capturado:', eventData);
-    sendEventToBackground(eventData);
+    if (target.type === 'file') {
+        const files = Array.from(target.files || []);
+        files.forEach(file => {
+            const eventData: UserInteractionEvent = {
+                tipo_evento: 'file_upload',
+                elemento_target: getElementInfo(target),
+                nombre_archivo: file.name,
+                timestamp: new Date().toISOString(),
+                url_origen: window.location.href
+            };
+            
+            console.log('[Athos] Evento de file upload capturado:', eventData);
+            sendEventToBackground(eventData);
+        });
+    }
 }
 
-function handleCopy(event: ClipboardEvent) {
-    if (!isActive) return;
+// Manejador de corte
+function cutHandler(event: ClipboardEvent) {
+    if (!isActive || !isAuthenticated) return;
     const selection = window.getSelection();
     const selectedText = selection?.toString() || '';
     
     const eventData: UserInteractionEvent = {
-        tipo_evento: 'copy',
+        tipo_evento: 'cut',
         elemento_target: {
             tag: 'selection',
             text: selectedText.substring(0, 100)
@@ -278,52 +181,169 @@ function handleCopy(event: ClipboardEvent) {
         texto: selectedText.substring(0, 100)
     };
     
-    console.log('[Athos] Evento de copia capturado:', eventData);
+    console.log('[Athos] Evento de corte capturado:', eventData);
     sendEventToBackground(eventData);
 }
 
-function handlePaste(event: ClipboardEvent) {
-    if (!isActive) return;
-    const pastedText = event.clipboardData?.getData('text') || '';
-    const target = event.target as HTMLElement;
+// Manejador de impresión
+function printHandler() {
+    if (!isActive || !isAuthenticated) return;
     
     const eventData: UserInteractionEvent = {
-        tipo_evento: 'paste',
-        elemento_target: getElementInfo(target),
+        tipo_evento: 'print',
+        elemento_target: { tag: 'window' },
         timestamp: new Date().toISOString(),
-        url_origen: window.location.href,
-        texto: pastedText.substring(0, 100)
+        url_origen: window.location.href
     };
     
-    console.log('[Athos] Evento de pegado capturado:', eventData);
+    console.log('[Athos] Evento de impresión capturado:', eventData);
     sendEventToBackground(eventData);
 }
 
-function handleCut(event: ClipboardEvent) {
-    if (!isActive) return;
-    const selection = window.getSelection();
-    const text = selection?.toString().substring(0, 100);
-    chrome.runtime.sendMessage({
-      type: 'user_interaction',
-      data: {
-        tipo_evento: 'cut',
-        elemento_target: {
-          tag: 'selection',
-          text: text
-        },
-        timestamp: new Date().toISOString(),
-        url_origen: window.location.href
-      }
-    });
+// Manejador de descargas
+function downloadHandler(event: MouseEvent) {
+    if (!isActive || !isAuthenticated) return;
+    const target = event.target as HTMLElement;
+    
+    // Verificar si es un enlace de descarga
+    let downloadElement: HTMLAnchorElement | null = null;
+    
+    // Buscar elemento <a> con atributo download o que termine en extensión de archivo
+    if (target.tagName.toLowerCase() === 'a') {
+        downloadElement = target as HTMLAnchorElement;
+    } else {
+        // Buscar elemento padre que sea un enlace
+        downloadElement = target.closest('a');
+    }
+    
+    if (downloadElement) {
+        const href = downloadElement.href;
+        const downloadAttr = downloadElement.getAttribute('download');
+        
+        // Verificar si es una descarga (tiene atributo download o URL parece ser un archivo)
+        const isDownload = downloadAttr !== null || 
+                          /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|rar|jpg|jpeg|png|gif|mp4|mp3|txt|csv)$/i.test(href);
+        
+        if (isDownload) {
+            // Extraer nombre del archivo
+            let fileName = downloadAttr || '';
+            if (!fileName) {
+                // Extraer nombre del archivo de la URL
+                const urlParts = href.split('/');
+                fileName = urlParts[urlParts.length - 1] || 'archivo_desconocido';
+                // Remover parámetros de query si existen
+                fileName = fileName.split('?')[0];
+            }
+            
+            const eventData: UserInteractionEvent = {
+                tipo_evento: 'download',
+                elemento_target: {
+                    tag: downloadElement.tagName.toLowerCase(),
+                    id: downloadElement.id || undefined,
+                    class: downloadElement.className || undefined,
+                    text: downloadElement.textContent?.trim().substring(0, 100) || undefined,
+                    href: href
+                },
+                nombre_archivo: fileName,
+                timestamp: new Date().toISOString(),
+                url_origen: window.location.href
+            };
+            
+            console.log('[Athos] Evento de descarga capturado:', eventData);
+            sendEventToBackground(eventData);
+        }
+    }
 }
 
+// Función para manejar eventos de teclado
 function handleKeyDown(event: KeyboardEvent) {
-    if (!isActive) return;
-    // ... resto del código existente ...
+    if (!isActive || !isAuthenticated) return;
+    
+    // Detectar combinaciones de teclas importantes
+    if (event.ctrlKey || event.metaKey) {
+        let eventType: 'copy' | 'paste' | 'cut' | null = null;
+        
+        switch (event.key.toLowerCase()) {
+            case 'c':
+                eventType = 'copy';
+                break;
+            case 'v':
+                eventType = 'paste';
+                break;
+            case 'x':
+                eventType = 'cut';
+                break;
+            case 'p':
+                // Ctrl+P para imprimir
+                const printEventData: UserInteractionEvent = {
+                    tipo_evento: 'print',
+                    elemento_target: { tag: 'window' },
+                    timestamp: new Date().toISOString(),
+                    url_origen: window.location.href
+                };
+                console.log('[Athos] Evento de impresión (Ctrl+P) capturado:', printEventData);
+                sendEventToBackground(printEventData);
+                break;
+        }
+        
+        if (eventType) {
+            console.log(`[Athos] Combinación de teclas ${eventType} detectada:`, event.key);
+        }
+    }
 }
 
-// Modificar la función de registro de eventos para verificar si está activo
-function registerEvent(event: UserInteractionEvent) {
-    if (!isActive) return;
-    // ... resto del código existente ...
-} 
+// Función para agregar todos los listeners
+function addAllListeners() {
+    document.addEventListener('click', clickHandler);
+    document.addEventListener('copy', copyHandler);
+    document.addEventListener('paste', pasteHandler);
+    document.addEventListener('change', changeHandler);
+    document.addEventListener('cut', cutHandler);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('beforeprint', printHandler);
+    
+    // Listener específico para descargas en enlaces
+    document.addEventListener('click', downloadHandler);
+}
+
+// Inicialización
+async function initialize() {
+    await checkAuth();
+    if (isAuthenticated) {
+        addAllListeners();
+        console.log('[Athos] Active Protection: Monitoreo de riesgo activado');
+    } else {
+        console.log('[Athos] Active Protection: Usuario no autenticado, esperando autenticación');
+    }
+}
+
+// Escuchar cambios en el storage
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.jwt_token) {
+        checkAuth().then(() => {
+            if (isAuthenticated) {
+                addAllListeners();
+                console.log('[Athos] Usuario autenticado, activando protección');
+            } else {
+                console.log('[Athos] Usuario desautenticado, removiendo protección');
+            }
+        });
+    }
+});
+
+// Escuchar mensajes del background script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'session_ended') {
+        console.log('[Athos] Sesión finalizada, desactivando protección');
+        isActive = false;
+        removeAllListeners();
+        // Limpiar cualquier estado pendiente
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+        }
+        sendResponse({ success: true });
+    }
+});
+
+// Iniciar el script
+initialize();

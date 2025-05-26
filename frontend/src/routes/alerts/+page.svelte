@@ -246,6 +246,7 @@
   async function loadRegistros() {
     loadingRegistros = true;
     let params = new URLSearchParams();
+    // Por defecto mostrar solo bloqueos si no hay estado seleccionado
     params.append('action', selectedEstadoBloq || 'bloqueado');
     if (selectedUserBloq) params.append('user_id', selectedUserBloq);
     if (selectedCategoriaBloq) params.append('category', selectedCategoriaBloq);
@@ -257,11 +258,23 @@
       });
       const data = await res.json();
       if (data.success) {
-        registros = data.data;
+        registros = data.data
+          .filter((reg: any) => reg.domain && reg.domain.trim() !== '')
+          .map((reg: any) => {
+            let policyInfo = reg.policy_info;
+            if (typeof policyInfo === 'string') {
+              try { policyInfo = JSON.parse(policyInfo); } catch { policyInfo = { category: 'sin categoría', block_reason: 'Sin motivo especificado' }; }
+            }
+            return {
+              ...reg,
+              policy_info: policyInfo || { category: 'sin categoría', block_reason: 'Sin motivo especificado' }
+            };
+          });
       } else {
         registros = [];
       }
-    } catch {
+    } catch (error) {
+      console.error('Error cargando registros:', error);
       registros = [];
     } finally {
       loadingRegistros = false;
@@ -270,20 +283,32 @@
 
   async function loadTarjetas() {
     let params = new URLSearchParams();
-    if (selectedUser) params.append('user_id', selectedUser);
-    if (selectedCategoria) params.append('category', selectedCategoria);
-    if (dateFrom) params.append('date_from', dateFrom);
-    if (dateTo) params.append('date_to', dateTo);
+    if (selectedUserBloq) params.append('user_id', selectedUserBloq);
+    if (selectedCategoriaBloq) params.append('category', selectedCategoriaBloq);
+    if (dateFromBloq) params.append('date_from', dateFromBloq);
+    if (dateToBloq) params.append('date_to', dateToBloq);
+    params.append('action', selectedEstadoBloq || 'bloqueado');
     try {
-      const res = await fetch(`${API_URL}/api/alerts?${params.toString()}`, {
+      const res = await fetch(`${API_URL}/api/navigation_logs?${params.toString()}`, {
         headers: { 'Authorization': `Bearer ${auth.token}` }
       });
       const data = await res.json();
       if (data.success) {
-        tarjetas = categorias.map(cat => {
-          const found = data.data.find((a: any) => a.category === cat);
-          return { category: cat, count: found ? found.count : 0 };
-        });
+        // Agrupar por categoría y contar
+        const categoryCounts = data.data.reduce((acc: any, reg: any) => {
+          let policyInfo = reg.policy_info;
+          if (typeof policyInfo === 'string') {
+            try { policyInfo = JSON.parse(policyInfo); } catch { policyInfo = { category: 'sin categoría' }; }
+          }
+          const category = policyInfo?.category || 'sin categoría';
+          acc[category] = (acc[category] || 0) + 1;
+          return acc;
+        }, {});
+        // Convertir a formato de tarjetas
+        tarjetas = categorias.map(cat => ({
+          category: cat,
+          count: categoryCounts[cat] || 0
+        }));
       } else {
         tarjetas = categorias.map(cat => ({ category: cat, count: 0 }));
       }
@@ -432,7 +457,12 @@
     try {
       let params = new URLSearchParams();
       if (selectedUserGeo) params.append('user_id', selectedUserGeo);
-      if (selectedUbicacionGeo) params.append('ubicacion', selectedUbicacionGeo);
+      if (selectedUbicacionGeo) {
+        // Si la ubicación contiene una coma, separar en ciudad y país
+        const [ciudad, pais] = selectedUbicacionGeo.split(',').map(s => s.trim());
+        if (ciudad) params.append('ciudad', ciudad);
+        if (pais) params.append('pais', pais);
+      }
       if (dateFromGeo) params.append('date_from', dateFromGeo);
       if (dateToGeo) params.append('date_to', dateToGeo);
       if (selectedEstadoGeo) params.append('estado', selectedEstadoGeo);
@@ -504,7 +534,8 @@
 
   onMount(async () => {
     if (!auth.token) {
-      goto('/login');
+      const currentPath = window.location.pathname;
+      goto(`/login?redirect=${encodeURIComponent(currentPath)}`);
       return;
     }
     // Load prerequisites common to multiple tabs or global filters
@@ -516,13 +547,6 @@
       await loadAlertStats();
       centroDataLoaded = true;
     }
-    // Add similar blocks if other tabs can be initial, though 'centro' is default
-    // For example, if activeTab could be initialized to 'riesgo':
-    // else if (activeTab === 'riesgo') {
-    //   await loadRiesgoData();
-    //   riesgoDataLoaded = true;
-    // }
-    // etc. for other potential initial tabs.
   });
 </script>
 
@@ -534,13 +558,15 @@
       <h1 class="text-2xl font-bold text-gray-900">Centro de Alertas</h1>
     </div>
     <!-- Pestañas -->
-    <div class="border-b border-gray-200 mt-4 overflow-x-auto whitespace-nowrap">
-      <nav class="-mb-px flex space-x-8">
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'centro' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('centro')}>Centro de Alertas</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'riesgo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('riesgo')}>RiesgoAct</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'bloqueos' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('bloqueos')}>BloqNet</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'comportamiento' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('comportamiento')}>ComportGuard</button>
-        <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('geo')}>GeoAlerta</button>
+    <div class="border-b border-gray-200 mt-4">
+      <nav class="-mb-px flex justify-between">
+        <div class="flex space-x-8">
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'centro' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('centro')}>Centro de Alertas</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'riesgo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('riesgo')}>RiesgoAct</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'bloqueos' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('bloqueos')}>BloqNet</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'comportamiento' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('comportamiento')}>ComportGuard</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => switchTab('geo')}>GeoAlerta</button>
+        </div>
       </nav>
     </div>
 
@@ -882,6 +908,7 @@
         <div class="mb-6">
           <h2 class="text-lg font-semibold text-gray-900 mb-2">BloqNet</h2>
           <p class="text-gray-600 mb-4">Visualización y análisis de los intentos de acceso bloqueados o permitidos, agrupados por categoría de contenido.</p>
+          <!--
           <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             {#each tarjetas as tarjeta}
               <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 flex flex-col items-center">
@@ -890,6 +917,7 @@
               </div>
             {/each}
           </div>
+          -->
         </div>
         <!-- Filtros BloqNet -->
         <div class="flex flex-wrap gap-4 mb-8 items-end mt-6 px-6">
@@ -928,13 +956,13 @@
             <input class="border rounded px-2 py-1" type="date" bind:value={dateToBloq} on:change={filtrarBloq} />
           </div>
         </div>
-        <!-- Tabla de registros (solo bloqueados o permitidos) -->
+        <!-- Tabla de registros -->
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-gray-200 mt-4">
             <thead class="bg-gray-50">
               <tr>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usuario</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dominio</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/3">Dominio</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Categoría</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Motivo</th>
@@ -950,14 +978,18 @@
                 {#each registros as reg}
                   <tr class="hover:bg-gray-50">
                     <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{users.find(u => u.id === reg.user_id)?.email || reg.user_id}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">{reg.domain}</td>
+                    <td class="px-4 py-4 text-sm text-gray-500 break-all max-w-xs">
+                      <div class="truncate" title={reg.domain}>{reg.domain}</div>
+                    </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">{reg.policy_info?.category || '-'}</td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">
                       <span class="px-2 py-1 text-xs font-semibold rounded-full {reg.action === 'bloqueado' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">
                         {reg.action === 'bloqueado' ? 'Bloqueado' : 'Permitido'}
                       </span>
                     </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">{reg.policy_info?.block_reason || '-'}</td>
+                    <td class="px-4 py-4 text-sm text-gray-500 max-w-xs">
+                      <div class="truncate" title={reg.policy_info?.block_reason || '-'}>{reg.policy_info?.block_reason || '-'}</div>
+                    </td>
                     <td class="px-4 py-4 whitespace-nowrap text-sm">{new Date(reg.timestamp).toLocaleString()}</td>
                   </tr>
                 {/each}
@@ -1026,18 +1058,20 @@
                 {#each comportamientoData as item}
                   <tr>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{users.find(u => u.id === item.usuario)?.email || item.usuario}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.tipo}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                      {#if item.tipo === 'Sitio inusual'}
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">{item.tipo}</span>
+                      {:else}
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">{item.tipo}</span>
+                      {/if}
+                    </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.detalle}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.hora}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                       {#if item.sospechoso}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                          Sospechoso
-                        </span>
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Sospechoso</span>
                       {:else}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                          Normal
-                        </span>
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Normal</span>
                       {/if}
                     </td>
                   </tr>
@@ -1159,18 +1193,18 @@
               <thead class="bg-gray-50">
                 <tr>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usuario</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ubicación</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora</th>
                 </tr>
               </thead>
               <tbody class="bg-white divide-y divide-gray-200">
-                {#each geoData as item}
+                {#each geoData as item, i}
                   <tr>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{users.find(u => u.id === item.usuario)?.email || item.usuario}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.ciudad}, {item.pais}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{users.find((u: any) => u.id === (item as GeoData).usuario)?.email || (item as GeoData).usuario}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{(item as GeoData).ip}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
-                      {#if item.alerta}
+                      {#if (item as GeoData).alerta}
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
                           IP No Habitual
                         </span>
@@ -1180,7 +1214,7 @@
                         </span>
                       {/if}
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.hora}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{(item as GeoData).hora}</td>
                   </tr>
                 {/each}
               </tbody>
