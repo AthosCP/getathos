@@ -89,6 +89,7 @@
   let errorGeo = '';
   let currentPageGeo = 1;
   let totalPagesGeo = 1;
+  let pageSizeGeo = 20;
   // Data loaded flags
   let centroDataLoaded = false;
   let riesgoDataLoaded = false;
@@ -451,6 +452,7 @@
   }
 
   async function loadGeoData() {
+    console.log('Llamando a loadGeoData');
     loadingGeo = true;
     errorGeo = '';
     try {
@@ -511,6 +513,7 @@
   }
 
   function switchTab(newTab: Tab) {
+    console.log('Cambiando a pestaña:', newTab);
     activeTab = newTab;
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('alerts_active_tab', newTab);
@@ -535,12 +538,12 @@
   }
 
   onMount(async () => {
+    console.log('activeTab al montar:', activeTab);
     if (!auth.token) {
       const currentPath = window.location.pathname;
       goto(`/login?redirect=${encodeURIComponent(currentPath)}`);
       return;
     }
-    // Load prerequisites common to multiple tabs or global filters
     await loadCategorias();
     await loadUsers();
 
