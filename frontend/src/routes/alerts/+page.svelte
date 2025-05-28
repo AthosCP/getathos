@@ -13,7 +13,7 @@
 
   // Estado de las pestañas
   type Tab = 'centro' | 'riesgo' | 'bloqueos' | 'comportamiento' | 'geo';
-  let activeTab: Tab = 'centro';
+  let activeTab: Tab = (typeof localStorage !== 'undefined' && localStorage.getItem('alerts_active_tab') as Tab) || 'centro';
 
   // Interfaz para datos de riesgo
   interface RiesgoData {
@@ -89,7 +89,6 @@
   let errorGeo = '';
   let currentPageGeo = 1;
   let totalPagesGeo = 1;
-  let pageSizeGeo = 20;
   // Data loaded flags
   let centroDataLoaded = false;
   let riesgoDataLoaded = false;
@@ -513,6 +512,9 @@
 
   function switchTab(newTab: Tab) {
     activeTab = newTab;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('alerts_active_tab', newTab);
+    }
     if (newTab === 'centro' && !centroDataLoaded) {
       loadAlertStats();
       centroDataLoaded = true;
@@ -542,10 +544,23 @@
     await loadCategorias();
     await loadUsers();
 
-    // Load data for the initially active tab
+    // Cargar datos para la pestaña activa
     if (activeTab === 'centro') {
       await loadAlertStats();
       centroDataLoaded = true;
+    } else if (activeTab === 'riesgo') {
+      await loadRiesgoData();
+      riesgoDataLoaded = true;
+    } else if (activeTab === 'bloqueos') {
+      await loadRegistros();
+      await loadTarjetas();
+      bloqNetDataLoaded = true;
+    } else if (activeTab === 'comportamiento') {
+      await loadComportamientoData();
+      comportamientoDataLoaded = true;
+    } else if (activeTab === 'geo') {
+      await loadGeoData();
+      geoDataLoaded = true;
     }
   });
 </script>
@@ -580,6 +595,7 @@
             <p class="text-gray-600">Visualización y análisis de alertas de seguridad, incluyendo distribución por categoría, nivel de riesgo y tendencias temporales.</p>
           </div>
           <!-- Filtros -->
+          <!--
           <div class="flex flex-wrap gap-4 mb-8 items-end mt-6 px-6">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Usuario</label>
@@ -608,30 +624,27 @@
               <input class="border rounded px-2 py-1" type="date" bind:value={dateTo} on:change={filtrar} />
             </div>
           </div>
+          -->
+          <!-- Resumen de alertas -->
+          <div class="flex flex-nowrap gap-4 mb-8 overflow-x-auto px-4 md:px-12 justify-center pt-6">
+            <div class="rounded-xl px-6 py-6 bg-red-50 flex flex-col items-center min-w-[200px]">
+              <span class="text-4xl font-extrabold text-red-600">{alertStats.alerts_by_severity.high}</span>
+              <span class="text-base text-gray-700 mt-1">Alertas de Alto Riesgo</span>
+            </div>
+            <div class="rounded-xl px-6 py-6 bg-yellow-50 flex flex-col items-center min-w-[200px]">
+              <span class="text-4xl font-extrabold text-yellow-600">{alertStats.alerts_by_severity.medium}</span>
+              <span class="text-base text-gray-700 mt-1">Alertas de Riesgo Medio</span>
+            </div>
+            <div class="rounded-xl px-6 py-6 bg-green-50 flex flex-col items-center min-w-[200px]">
+              <span class="text-4xl font-extrabold text-green-600">{alertStats.alerts_by_severity.low}</span>
+              <span class="text-base text-gray-700 mt-1">Alertas de Bajo Riesgo</span>
+            </div>
+          </div>
           {#if loadingStats}
             <div class="text-center py-6">
               <p class="text-gray-500">Cargando estadísticas...</p>
             </div>
           {:else}
-            <!-- Resumen de alertas -->
-            <div class="flex flex-col gap-4 mb-8">
-              <div class="rounded-xl px-6 py-6 bg-blue-50 flex flex-col items-center">
-                <span class="text-4xl font-extrabold text-indigo-600">{alertStats.total_alerts}</span>
-                <span class="text-base text-gray-700 mt-1">Total de Alertas</span>
-              </div>
-              <div class="rounded-xl px-6 py-6 bg-red-50 flex flex-col items-center">
-                <span class="text-4xl font-extrabold text-red-600">{alertStats.alerts_by_severity.high}</span>
-                <span class="text-base text-gray-700 mt-1">Alertas de Alto Riesgo</span>
-              </div>
-              <div class="rounded-xl px-6 py-6 bg-yellow-50 flex flex-col items-center">
-                <span class="text-4xl font-extrabold text-yellow-600">{alertStats.alerts_by_severity.medium}</span>
-                <span class="text-base text-gray-700 mt-1">Alertas de Riesgo Medio</span>
-              </div>
-              <div class="rounded-xl px-6 py-6 bg-green-50 flex flex-col items-center">
-                <span class="text-4xl font-extrabold text-green-600">{alertStats.alerts_by_severity.low}</span>
-                <span class="text-base text-gray-700 mt-1">Alertas de Bajo Riesgo</span>
-              </div>
-            </div>
             <!-- Gráficos modernos -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8 px-6">
               <div class="bg-white rounded-lg shadow p-6">
@@ -1044,40 +1057,44 @@
               <p class="text-gray-500">No hay datos de comportamiento para mostrar.</p>
             </div>
           {:else}
-            <table class="min-w-full divide-y divide-gray-200">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usuario</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipo</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Detalle</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
-                </tr>
-              </thead>
-              <tbody class="bg-white divide-y divide-gray-200">
-                {#each comportamientoData as item}
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
                   <tr>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{users.find(u => u.id === item.usuario)?.email || item.usuario}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm">
-                      {#if item.tipo === 'Sitio inusual'}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">{item.tipo}</span>
-                      {:else}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">{item.tipo}</span>
-                      {/if}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.detalle}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.hora}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm">
-                      {#if item.sospechoso}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Sospechoso</span>
-                      {:else}
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Normal</span>
-                      {/if}
-                    </td>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Usuario</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Tipo</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Detalle</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Fecha/Hora</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Estado</th>
                   </tr>
-                {/each}
-              </tbody>
-            </table>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                  {#each comportamientoData as item}
+                    <tr>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{users.find(u => u.id === item.usuario)?.email || item.usuario}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        {#if item.tipo === 'Sitio inusual'}
+                          <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">{item.tipo}</span>
+                        {:else}
+                          <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">{item.tipo}</span>
+                        {/if}
+                      </td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 break-all max-w-xs">
+                        <div class="truncate" title={item.detalle}>{item.detalle}</div>
+                      </td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(item.hora).toLocaleString()}</td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        {#if item.sospechoso}
+                          <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Sospechoso</span>
+                        {:else}
+                          <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Normal</span>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
             <!-- Paginación -->
             <div class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
               <div class="flex-1 flex justify-between sm:hidden">

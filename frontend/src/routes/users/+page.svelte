@@ -33,7 +33,7 @@
     role: 'user', 
     tenant_id: ''
   };
-  let activeTab = 'people';
+  let activeTab = (typeof localStorage !== 'undefined' && localStorage.getItem('users_active_tab')) || 'general';
   let groups: Group[] = [];
   let loadingGroups = true;
   let errorGroups = '';
@@ -47,6 +47,13 @@
   let massiveEmailsText: string = '';
   let createError: string = '';
   let massiveDefaultPassword: string = '';
+
+  function setActiveTab(tab: string) {
+    activeTab = tab;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('users_active_tab', tab);
+    }
+  }
 
   async function loadUsers() {
     loading = true;
@@ -352,6 +359,13 @@
     }
     await loadUsers();
     await loadGroups();
+
+    // Cargar datos para la pestaña activa
+    if (activeTab === 'people') {
+      await loadUsers();
+    } else if (activeTab === 'groups') {
+      await loadGroups();
+    }
   });
 </script>
 
@@ -366,13 +380,13 @@
         <nav class="-mb-px flex space-x-8">
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'people' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'people'}
+            on:click={() => setActiveTab('people')}
           >
             Personas
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'groups' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'groups'}
+            on:click={() => setActiveTab('groups')}
           >
             Grupos
           </button>

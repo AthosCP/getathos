@@ -17,7 +17,7 @@
   let currentUser: User | null = null;
   $: currentUser = $auth.user;
 
-  let activeTab = 'access';
+  let activeTab = (typeof localStorage !== 'undefined' && localStorage.getItem('policies_active_tab')) || 'general';
   let filter = 'all';
   let search = '';
   let policies: Policy[] = [];
@@ -187,6 +187,21 @@
     if (currentUser.role === 'admin') {
       loadTenantsForAdmin(); 
     }
+
+    // Cargar datos para la pestaña activa
+    if (activeTab === 'access') {
+      loadPolicies();
+    } else if (activeTab === 'watermark') {
+      // Si hay función para cargar datos de watermark, llamarla aquí
+    } else if (activeTab === 'downloads') {
+      // Si hay función para cargar datos de downloads, llamarla aquí
+    } else if (activeTab === 'content') {
+      // Si hay función para cargar datos de content, llamarla aquí
+    } else if (activeTab === 'geo') {
+      // Si hay función para cargar datos de geo, llamarla aquí
+    } else if (activeTab === 'schedules') {
+      // Si hay función para cargar datos de schedules, llamarla aquí
+    }
   });
 
   function openCreateModal() {
@@ -335,6 +350,13 @@
       error = 'Error de conexión';
     }
   }
+
+  function setActiveTab(tab: string) {
+    activeTab = tab;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('policies_active_tab', tab);
+    }
+  }
 </script>
 
 <Navbar active="policies" />
@@ -349,37 +371,37 @@
         <nav class="-mb-px flex space-x-8">
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'access' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'access'}
+            on:click={() => setActiveTab('access')}
           >
             Accesos
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'watermark' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'watermark'}
+            on:click={() => setActiveTab('watermark')}
           >
             Sello de Agua
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'downloads' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'downloads'}
+            on:click={() => setActiveTab('downloads')}
           >
             Descargas
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'content' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'content'}
+            on:click={() => setActiveTab('content')}
           >
             Contenido
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'geo'}
+            on:click={() => setActiveTab('geo')}
           >
             Geolocalización
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'schedules' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => activeTab = 'schedules'}
+            on:click={() => setActiveTab('schedules')}
           >
             Horarios
           </button>

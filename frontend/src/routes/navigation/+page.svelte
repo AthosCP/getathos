@@ -34,7 +34,7 @@
   let blocking = false;
   let blockError = '';
   let blockSuccess = '';
-  let activeTab = 'general';
+  let activeTab = (typeof localStorage !== 'undefined' && localStorage.getItem('navigation_active_tab')) || 'general';
 
   // Estadísticas generales
   interface Stats {
@@ -342,6 +342,20 @@
     loadUsers();
     loadLogs();
     loadStats();
+
+    // Cargar datos para la pestaña activa
+    if (activeTab === 'general') {
+      loadStats();
+    } else if (activeTab === 'historial') {
+      loadLogs();
+    } else if (activeTab === 'navegavisor') {
+      // No hay función específica, los datos se procesan desde logs
+      loadLogs();
+    } else if (activeTab === 'sesio') {
+      // No hay función específica, los datos se procesan desde logs
+      loadLogs();
+    }
+
     document.addEventListener('click', handleClickOutside);
     return () => {
       document.removeEventListener('click', handleClickOutside);
@@ -473,6 +487,13 @@
       }]
     };
   }
+
+  function setActiveTab(tab: string) {
+    activeTab = tab;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('navigation_active_tab', tab);
+    }
+  }
 </script>
 
 <Navbar active="navigation" />
@@ -484,10 +505,10 @@
       <h1 class="text-2xl font-bold mb-4">Centro de Navegación</h1>
       <div class="mb-6">
         <nav class="-mb-px flex space-x-8 border-b border-gray-200">
-          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'general' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'general'}>General</button>
-          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'historial' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'historial'}>Historial</button>
-          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'navegavisor' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'navegavisor'}>NavegaVisor</button>
-          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'sesio' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => activeTab = 'sesio'}>SesioTrack</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'general' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => setActiveTab('general')}>General</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'historial' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => setActiveTab('historial')}>Historial</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'navegavisor' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => setActiveTab('navegavisor')}>NavegaVisor</button>
+          <button class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'sesio' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}" on:click={() => setActiveTab('sesio')}>SesioTrack</button>
         </nav>
       </div>
     </div>
