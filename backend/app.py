@@ -11,6 +11,8 @@ import json # Importar json
 import requests
 from urllib.parse import urlparse
 import hashlib
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # Cargar variables de entorno
 load_dotenv()
@@ -75,6 +77,7 @@ def check_url_with_webrisk(url):
                 .eq('tenant_id', tenant_id)\
                 .is_('group_id', 'null')\
                 .eq('domain', domain)\
+                .eq('type', 'access')\
                 .execute()
             
             group_policies = None
@@ -83,6 +86,7 @@ def check_url_with_webrisk(url):
                 group_policies = user_supabase.table('policies').select('*')\
                     .in_('group_id', user_groups)\
                     .eq('domain', domain)\
+                    .eq('type', 'access')\
                     .execute()
             
             # Combinamos los resultados
@@ -173,6 +177,13 @@ jwt = JWTManager(app)
 
 print("JWT_SECRET_KEY:", app.config['JWT_SECRET_KEY'])
 
+# Configuración de Flask-Limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[]  # No hay límite global, solo por endpoint
+)
+
 # Middleware para verificar token
 @app.before_request
 def verify_token():
@@ -262,6 +273,7 @@ def index():
     })
 
 @app.route('/api/login', methods=['POST'])
+@limiter.limit("5 per minute")  # Limita a 5 intentos por minuto por IP
 def login():
     try:
         data = request.get_json()
@@ -761,6 +773,9 @@ def get_policies():
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
         user_supabase = get_supabase_with_jwt(jwt_token)
 
+        # Nuevo: filtrar por type (access por defecto)
+        policy_type = request.args.get('type', 'access')
+
         # Obtener políticas según el rol
         if role == 'user':
             print("[Backend] Obteniendo políticas para usuario normal")
@@ -773,13 +788,13 @@ def get_policies():
                 print(f"[Backend] Grupos del usuario: {user_groups}")
 
                 # Obtener políticas del tenant sin grupo
-                tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+                tenant_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').eq('type', policy_type).execute()
                 print(f"[Backend] Políticas del tenant: {len(tenant_policies.data)} encontradas")
 
                 # Obtener políticas de los grupos del usuario
                 group_policies = []
                 if user_groups:
-                    group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).execute().data
+                    group_policies = user_supabase.table('policies').select('*').in_('group_id', user_groups).eq('type', policy_type).execute().data
                     print(f"[Backend] Políticas de grupos: {len(group_policies)} encontradas")
 
                 # Combinar políticas
@@ -798,12 +813,14 @@ def get_policies():
                 for policy in all_policies:
                     processed_policy = {
                         'id': policy['id'],
-                        'domain': policy['domain'],
+                        'domain': policy.get('domain'),
                         'action': policy['action'],
                         'category': policy.get('category'),
                         'block_reason': policy.get('block_reason'),
                         'group_id': policy.get('group_id'),
-                        'group': group_info.get(policy.get('group_id'))
+                        'group': group_info.get(policy.get('group_id')),
+                        'user_id': policy.get('user_id'),
+                        'type': policy.get('type', 'access')
                     }
                     processed_policies.append(processed_policy)
 
@@ -816,23 +833,29 @@ def get_policies():
                 traceback.print_exc()
                 return jsonify({"success": False, "error": str(e)}), 500
 
-        else:
+        else:  # Para client y admin
             print("[Backend] Obteniendo políticas para rol administrativo")
             # Para client y admin, obtener todas las políticas del tenant con información de grupos
-            policies = user_supabase.table('policies').select('*, groups(name)').eq('tenant_id', tenant_id).execute()
+            policies = user_supabase.table('policies').select('*, groups(name)').eq('tenant_id', tenant_id).eq('type', policy_type).execute()
             print(f"[Backend] Políticas encontradas para tenant: {len(policies.data)}")
+            
+            # Debug: imprimir la primera política para ver qué campos vienen
+            if policies.data:
+                print(f"[Backend] Ejemplo de política recibida: {policies.data[0]}")
             
             # Procesar las políticas para incluir la información del grupo
             processed_policies = []
             for policy in policies.data:
                 processed_policy = {
                     'id': policy['id'],
-                    'domain': policy['domain'],
+                    'domain': policy.get('domain'),
                     'action': policy['action'],
                     'category': policy.get('category'),
                     'block_reason': policy.get('block_reason'),
                     'group_id': policy.get('group_id'),
-                    'group': policy.get('groups')
+                    'group': policy.get('groups'),
+                    'user_id': policy.get('user_id'),
+                    'type': policy.get('type', 'access')
                 }
                 if processed_policy['group'] is None:
                     del processed_policy['group']
@@ -852,78 +875,109 @@ def create_policy():
     try:
         claims = get_jwt()
         role = claims.get('role')
-        requesting_tenant_id = claims.get('tenant_id') # Tenant del usuario que hace la request
+        requesting_tenant_id = claims.get('tenant_id')
         data = request.get_json()
         
-        print("Intentando crear política con datos:", data)
-        print("Claims JWT:", claims)
+        print("[Backend] Iniciando creación de política...")
+        print("[Backend] Datos recibidos:", data)
+        print("[Backend] Claims JWT:", claims)
+        
+        if not data:
+            print("[Backend] Error: No se recibieron datos en el request")
+            return jsonify({"success": False, "error": "No se recibieron datos en el request"}), 400
         
         policy_tenant_id = None
         group_id = data.get('group_id')
+        policy_type = data.get('type', 'access')
+        user_id = data.get('user_id')
+
+        print(f"[Backend] Tipo de política: {policy_type}")
+        print(f"[Backend] User ID: {user_id}")
+        print(f"[Backend] Group ID: {group_id}")
 
         if role == 'client':
             if not requesting_tenant_id:
-                 return jsonify({"error": "Cliente debe tener un tenant_id asociado"}), 403
+                print("[Backend] Error: Cliente sin tenant_id")
+                return jsonify({"success": False, "error": "Cliente debe tener un tenant_id asociado"}), 403
             policy_tenant_id = requesting_tenant_id
-            # Si un cliente especifica un group_id, este debe pertenecer a su tenant_id
             if group_id:
                 jwt_token_client = request.headers.get('Authorization', '').replace('Bearer ', '')
                 client_supabase = get_supabase_with_jwt(jwt_token_client)
                 group_check = client_supabase.table('groups').select('id, tenant_id').eq('id', group_id).eq('tenant_id', policy_tenant_id).maybe_single().execute()
                 if not group_check.data:
-                    return jsonify({"error": "Grupo no encontrado o no pertenece al tenant del cliente"}), 400
+                    print("[Backend] Error: Grupo no encontrado o no pertenece al tenant del cliente")
+                    return jsonify({"success": False, "error": "Grupo no encontrado o no pertenece al tenant del cliente"}), 400
         elif role == 'admin':
-            policy_tenant_id = data.get('tenant_id') # Admin puede especificar el tenant_id
+            policy_tenant_id = data.get('tenant_id')
+            if not policy_tenant_id:
+                print("[Backend] Error: Admin debe especificar tenant_id")
+                return jsonify({"success": False, "error": "Admin debe especificar tenant_id"}), 400
             if group_id:
-                if not policy_tenant_id: # Si hay group_id, se necesita un tenant_id para validar el grupo
-                    return jsonify({"error": "Para asignar a un grupo, un admin debe especificar el tenant_id del grupo"}), 400
                 jwt_token_admin = request.headers.get('Authorization', '').replace('Bearer ', '')
                 admin_supabase = get_supabase_with_jwt(jwt_token_admin)
                 group_check = admin_supabase.table('groups').select('id, tenant_id').eq('id', group_id).eq('tenant_id', policy_tenant_id).maybe_single().execute()
                 if not group_check.data:
-                    return jsonify({"error": "Grupo no encontrado o no pertenece al tenant_id especificado"}), 400
-            elif not policy_tenant_id: # Si no es política de grupo, y admin no especifica tenant, es error
-                 return jsonify({"error": "Admin debe especificar tenant_id si la política no es para un grupo específico (o si el grupo es global, no implementado)"}), 400
+                    print("[Backend] Error: Grupo no encontrado o no pertenece al tenant especificado")
+                    return jsonify({"success": False, "error": "Grupo no encontrado o no pertenece al tenant_id especificado"}), 400
         else:
-            return jsonify({"error": "No autorizado para crear políticas"}), 403
+            print("[Backend] Error: Rol no autorizado")
+            return jsonify({"success": False, "error": "No autorizado para crear políticas"}), 403
             
-        if not policy_tenant_id and not group_id: # Sanity check, aunque la lógica anterior debería cubrirlo
-             return jsonify({"error": "La política debe estar asociada a un tenant o a un grupo (que a su vez tiene un tenant)"}), 400
+        if not policy_tenant_id:
+            print("[Backend] Error: Política sin tenant")
+            return jsonify({"success": False, "error": "La política debe estar asociada a un tenant"}), 400
 
-        # Validar acción
         if data.get('action') not in ['allow', 'block']:
-            return jsonify({"error": "Acción inválida"}), 400
-        if not data.get('domain'):
-            return jsonify({"error": "Dominio requerido"}), 400
-            
-        # Obtener el token JWT para pasar a Supabase
+            print("[Backend] Error: Acción inválida")
+            return jsonify({"success": False, "error": "Acción inválida"}), 400
+        if policy_type not in ['access', 'download']:
+            print("[Backend] Error: Tipo de política inválido")
+            return jsonify({"success": False, "error": "Tipo de política inválido"}), 400
+        if policy_type == 'access' and not data.get('domain'):
+            print("[Backend] Error: Dominio requerido para políticas de acceso")
+            return jsonify({"success": False, "error": "Dominio requerido para políticas de acceso"}), 400
+        
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token) # Usar el user_supabase del que hace la request para la inserción
-            
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
         insert_data = {
-            'domain': data['domain'],
             'action': data['action'],
-            'tenant_id': policy_tenant_id # Siempre guardamos el tenant_id
+            'tenant_id': policy_tenant_id,
+            'type': policy_type
         }
+        
         if group_id:
             insert_data['group_id'] = group_id
-            # El tenant_id de la política debe ser el del grupo. Ya validado.
+        if policy_type == 'access':
+            insert_data['domain'] = data['domain']
+        if policy_type == 'download':
+            if user_id:
+                insert_data['user_id'] = user_id
+            if group_id:
+                insert_data['group_id'] = group_id
         
-        print("Datos a insertar en policies:", insert_data)
-            
-        new_policy_res = user_supabase.table('policies').insert(insert_data).execute()
+        print("[Backend] Datos a insertar en policies:", insert_data)
+        
+        try:
+            new_policy_res = user_supabase.table('policies').insert(insert_data).execute()
+            print("[Backend] Respuesta de Supabase:", new_policy_res)
+        except Exception as e:
+            print(f"[Backend] Error al insertar en Supabase: {str(e)}")
+            return jsonify({"success": False, "error": f"Error al crear la política en la base de datos: {str(e)}"}), 500
 
         if not new_policy_res.data or (hasattr(new_policy_res, 'error') and new_policy_res.error):
             error_detail = new_policy_res.error.message if hasattr(new_policy_res, 'error') and new_policy_res.error else "No data returned"
-            print(f"Error al crear política en Supabase: {error_detail}")
+            print(f"[Backend] Error al crear política en Supabase: {error_detail}")
             return jsonify({"success": False, "error": f"No se pudo crear la política: {error_detail}"}), 500
         
+        print("[Backend] Política creada exitosamente")
         return jsonify({"success": True, "data": new_policy_res.data[0]}), 201
+        
     except Exception as e:
-        print(f"Error en create_policy: {str(e)}")
+        print(f"[Backend] Error en create_policy: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify({"success": False, "error": f"Error interno del servidor: {str(e)}"}), 500
 
 @app.route('/api/policies/<policy_id_str>', methods=['PUT']) # Usar policy_id_str
 @jwt_required()
@@ -942,24 +996,22 @@ def update_policy(policy_id_str): # Usar policy_id_str
         print(f"Intentando actualizar política {policy_id} con datos: {data}")
         
         jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-        user_supabase = get_supabase_with_jwt(jwt_token) # Usar el user_supabase del que hace la request
+        user_supabase = get_supabase_with_jwt(jwt_token)
 
-        # Verificar que la política existe y obtener su tenant_id y group_id actual
-        current_policy_res = user_supabase.table('policies').select('id, tenant_id, group_id').eq('id', policy_id).maybe_single().execute()
+        current_policy_res = user_supabase.table('policies').select('id, tenant_id, group_id, type').eq('id', policy_id).maybe_single().execute()
         if not current_policy_res.data:
             return jsonify({"error": "Política no encontrada"}), 404
         
         current_policy = current_policy_res.data
         current_policy_tenant_id = current_policy.get('tenant_id')
+        current_policy_type = current_policy.get('type', 'access')
 
-        # Verificar permisos
         if role == 'client':
             if not requesting_tenant_id or str(current_policy_tenant_id) != str(requesting_tenant_id):
                 return jsonify({"error": "No autorizado para modificar esta política (cliente)"}), 403
         elif role == 'admin':
-            # Admin puede modificar, pero si cambia tenant_id o group_id, las validaciones se aplican más abajo
             pass
-        else: # Otros roles
+        else:
             return jsonify({"error": "No autorizado para modificar políticas"}), 403
         
         update_payload = {}
@@ -968,41 +1020,21 @@ def update_policy(policy_id_str): # Usar policy_id_str
         if 'action' in data and data['action'] is not None:
             if data['action'] not in ['allow', 'block']:
                 return jsonify({"error": "Acción inválida"}), 400
-            # Mapear acciones a los valores aceptados por la base de datos
-            action_map = {
-                'block': 'bloqueado',
-                'bloqueo': 'bloqueado',
-                'allow': 'permitido',
-                'permitir': 'permitido',
-                'visit': 'visitado',
-                'visitado': 'visitado',
-                'interact': 'interaccion',
-                'interaccion': 'interaccion'
-            }
-            update_payload['action'] = action_map.get(data['action'], data['action'])
-
-        new_group_id = data.get('group_id') # Puede ser un UUID string, o None/null para desasociar
-        new_tenant_id_str = data.get('tenant_id') # Admin podría querer cambiar el tenant_id
-        
-        # Lógica para manejar cambio de tenant_id y group_id
-        # El tenant_id final de la política.
-        final_policy_tenant_id_str = current_policy_tenant_id # Por defecto el actual
-
+            update_payload['action'] = data['action']
+        if 'type' in data and data['type'] in ['access', 'download']:
+            update_payload['type'] = data['type']
+        new_group_id = data.get('group_id')
+        new_tenant_id_str = data.get('tenant_id')
+        final_policy_tenant_id_str = current_policy_tenant_id
         if role == 'admin' and new_tenant_id_str is not None and new_tenant_id_str != str(current_policy_tenant_id):
-            # Admin está intentando cambiar el tenant_id de la política directamente
             try:
                 UUID(new_tenant_id_str, version=4)
-                # Validar que el nuevo tenant existe (opcional, pero buena práctica)
-                # tenant_check = user_supabase.table('tenants').select('id').eq('id', new_tenant_id_str).maybe_single().execute()
-                # if not tenant_check.data:
-                #     return jsonify({"error": f"El nuevo tenant_id {new_tenant_id_str} no existe."}), 400
                 final_policy_tenant_id_str = new_tenant_id_str
                 update_payload['tenant_id'] = final_policy_tenant_id_str
             except ValueError:
                  return jsonify({"error": "Formato de nuevo tenant_id inválido."}), 400
-        
-        if new_group_id is not None: # Intentando asociar o cambiar grupo
-            if not final_policy_tenant_id_str: # Necesitamos un tenant para el grupo
+        if new_group_id is not None:
+            if not final_policy_tenant_id_str:
                  return jsonify({"error": "Se requiere un tenant_id para asociar la política a un grupo."}),400
             try:
                 parsed_new_group_id = UUID(new_group_id, version=4)
@@ -1010,25 +1042,17 @@ def update_policy(policy_id_str): # Usar policy_id_str
                 if not group_check.data:
                     return jsonify({"error": f"Nuevo grupo {new_group_id} no encontrado o no pertenece al tenant {final_policy_tenant_id_str}"}), 400
                 update_payload['group_id'] = str(parsed_new_group_id)
-                # La política tomará el tenant_id del grupo si se está asignando a un grupo.
-                # O si un admin cambia el tenant_id y el group_id, la validación anterior lo cubre.
-                update_payload['tenant_id'] = str(group_check.data['tenant_id']) # Asegurar consistencia
+                update_payload['tenant_id'] = str(group_check.data['tenant_id'])
             except ValueError:
                 return jsonify({"error": "Formato de nuevo group_id inválido."}), 400
-        elif 'group_id' in data and data['group_id'] is None: # Intentando desasociar de grupo
+        elif 'group_id' in data and data['group_id'] is None:
             update_payload['group_id'] = None
-            # Si se desasocia de grupo, el tenant_id de la política debe ser explícito.
-            # Si el admin no proveyó un tenant_id nuevo, se mantiene el original de la política (o el del client).
-            # Si el admin proveyó un tenant_id, ya está en final_policy_tenant_id_str.
-            if not final_policy_tenant_id_str and role == 'admin': # Client siempre tiene tenant_id
+            if not final_policy_tenant_id_str and role == 'admin':
                  return jsonify({"error": "Admin debe especificar un tenant_id si se desasocia la política de un grupo y no tenía uno antes."}), 400
             update_payload['tenant_id'] = final_policy_tenant_id_str
-
-
-        if not update_payload: # No hay nada que actualizar
-            # Devolver la política actual o un mensaje.
-            # Para consistencia, podríamos devolver la política actual si la buscamos con el join de grupo.
-            # O simplemente un 200 con la política (sin join).
+        if 'user_id' in data:
+            update_payload['user_id'] = data['user_id']
+        if not update_payload:
             current_policy_full_res = user_supabase.table('policies').select('*, groups(name)').eq('id', policy_id).maybe_single().execute()
             if current_policy_full_res.data:
                  processed_policy = current_policy_full_res.data
@@ -1037,24 +1061,19 @@ def update_policy(policy_id_str): # Usar policy_id_str
                     if processed_policy['group'] is None: del processed_policy['group']
                  elif 'groups' in processed_policy: del processed_policy['groups']
                  return jsonify({"success": True, "data": processed_policy, "message": "No changes detected"}), 200
-            else: # No debería pasar si el check inicial pasó
+            else:
                  return jsonify({"error": "Política no encontrada al final del proceso."}), 404
-
-
         print("Payload de actualización para policies:", update_payload)
         updated_policy_res = user_supabase.table('policies').update(update_payload).eq('id', policy_id).select('*, groups(name)').maybe_single().execute()
-        
         if not updated_policy_res.data or (hasattr(updated_policy_res, 'error') and updated_policy_res.error):
             error_detail = updated_policy_res.error.message if hasattr(updated_policy_res, 'error') and updated_policy_res.error else "No data returned"
             print(f"Error al actualizar política en Supabase: {error_detail}")
             return jsonify({"success": False, "error": f"No se pudo actualizar la política: {error_detail}"}), 500
-
         processed_updated_policy = updated_policy_res.data
         if processed_updated_policy.get('groups') is not None:
             processed_updated_policy['group'] = processed_updated_policy.pop('groups')
             if processed_updated_policy['group'] is None: del processed_updated_policy['group']
         elif 'groups' in processed_updated_policy: del processed_updated_policy['groups']
-
         return jsonify({"success": True, "data": processed_updated_policy})
     except Exception as e:
         print(f"Error en update_policy: {str(e)}")
@@ -1236,7 +1255,7 @@ def verify_policies(domain, tenant_id, role, user_id=None):
                     }
         # Si no hay user_id, solo verificar políticas globales
         if not user_id:
-            policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+            policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').eq('type', 'access').execute()
             for policy in policies.data:
                 if policy['domain'] in domain:
                     return {
@@ -1251,7 +1270,7 @@ def verify_policies(domain, tenant_id, role, user_id=None):
         user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
         user_groups = [group['group_id'] for group in user_groups_res.data]
         # Verificar políticas globales primero
-        global_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').execute()
+        global_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).is_('group_id', 'null').eq('type', 'access').execute()
         for policy in global_policies.data:
             if policy['domain'] in domain:
                 return {
@@ -1263,7 +1282,7 @@ def verify_policies(domain, tenant_id, role, user_id=None):
                 }
         # Luego verificar políticas de grupos
         if user_groups:
-            group_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).in_('group_id', user_groups).execute()
+            group_policies = user_supabase.table('policies').select('*').eq('tenant_id', tenant_id).in_('group_id', user_groups).eq('type', 'access').execute()
             for policy in group_policies.data:
                 if policy['domain'] in domain:
                     return {
@@ -1431,6 +1450,102 @@ def block_domain():
     except Exception as e:
         print(f"Error en block_domain: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/check-download', methods=['POST'])
+@jwt_required()
+def check_download():
+    """
+    Verifica si un usuario puede descargar archivos según las políticas configuradas.
+    Recibe: { url, filename, filesize, mimetype }
+    Retorna: { allowed: bool, reason: string }
+    """
+    try:
+        data = request.get_json()
+        url = data.get('url', '')
+        filename = data.get('filename', '')
+        
+        # Obtener claims del token JWT
+        claims = get_jwt()
+        tenant_id = claims.get('tenant_id')
+        role = claims.get('role')
+        user_id = claims.get('sub')
+        
+        print(f"[Backend] Verificando descarga - Usuario: {user_id}, Archivo: {filename}, URL: {url}")
+        
+        # Obtener conexión a Supabase
+        jwt_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_supabase = get_supabase_with_jwt(jwt_token)
+        
+        # Por defecto, permitir descargas
+        allowed = True
+        reason = "Descarga permitida"
+        
+        # 1. Verificar políticas globales del tenant (sin user_id ni group_id)
+        global_policies = user_supabase.table('policies').select('*')\
+            .eq('tenant_id', tenant_id)\
+            .is_('user_id', 'null')\
+            .is_('group_id', 'null')\
+            .eq('type', 'download')\
+            .execute()
+        
+        print(f"[Backend] Políticas globales encontradas: {len(global_policies.data)}")
+        if global_policies.data:
+            print(f"[Backend] Políticas globales: {global_policies.data}")
+            for policy in global_policies.data:
+                if policy['action'] == 'block':
+                    allowed = False
+                    reason = "Descargas bloqueadas por política global del tenant"
+                    print(f"[Backend] Descarga bloqueada por política global")
+                    return jsonify({"allowed": False, "reason": reason})
+        
+        # 2. Verificar políticas de grupos del usuario
+        if role == 'user':
+            # Obtener grupos del usuario
+            user_groups_res = user_supabase.table('group_users').select('group_id').eq('user_id', user_id).execute()
+            user_groups = [g['group_id'] for g in user_groups_res.data] if user_groups_res.data else []
+            
+            if user_groups:
+                group_policies = user_supabase.table('policies').select('*')\
+                    .in_('group_id', user_groups)\
+                    .eq('type', 'download')\
+                    .execute()
+                
+                print(f"[Backend] Políticas de grupos encontradas: {len(group_policies.data)}")
+                if group_policies.data:
+                    print(f"[Backend] Políticas de grupos: {group_policies.data}")
+                    for policy in group_policies.data:
+                        if policy['action'] == 'block':
+                            allowed = False
+                            reason = "Descargas bloqueadas por política de grupo"
+                            print(f"[Backend] Descarga bloqueada por política de grupo")
+                            return jsonify({"allowed": False, "reason": reason})
+        
+        # 3. Verificar políticas específicas del usuario
+        user_policies = user_supabase.table('policies').select('*')\
+            .eq('tenant_id', tenant_id)\
+            .eq('user_id', user_id)\
+            .eq('type', 'download')\
+            .execute()
+        
+        print(f"[Backend] Políticas de usuario encontradas: {len(user_policies.data)}")
+        if user_policies.data:
+            print(f"[Backend] Políticas de usuario: {user_policies.data}")
+            for policy in user_policies.data:
+                if policy['action'] == 'block':
+                    allowed = False
+                    reason = "Descargas bloqueadas por política de usuario"
+                    print(f"[Backend] Descarga bloqueada por política de usuario")
+                    return jsonify({"allowed": False, "reason": reason})
+        
+        print(f"[Backend] Resultado final - Permitido: {allowed}, Razón: {reason}")
+        return jsonify({"allowed": allowed, "reason": reason})
+        
+    except Exception as e:
+        print(f"[Backend] Error en check_download: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # En caso de error, permitir la descarga para no interrumpir al usuario
+        return jsonify({"allowed": True, "reason": "Error al verificar políticas"})
 
 # --- ENDPOINT: DASHBOARD ---
 @app.route('/api/admin/dashboard', methods=['GET'])

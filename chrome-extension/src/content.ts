@@ -345,5 +345,121 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
+// Interceptar descargas en enlaces y blobs
+document.addEventListener('click', async function(e) {
+  if (!isActive || !isAuthenticated) return;
+  const target = e.target as HTMLElement;
+  let link: HTMLAnchorElement | null = null;
+
+  if (target.tagName.toLowerCase() === 'a') {
+    link = target as HTMLAnchorElement;
+  } else {
+    link = target.closest('a');
+  }
+
+  if (link && (link.hasAttribute('download') || /\.(pdf|docx?|xlsx?|zip|rar|jpg|jpeg|png|gif|mp4|mp3|txt|csv)$/i.test(link.href))) {
+    // Extraer nombre del archivo
+    let fileName = link.getAttribute('download') || '';
+    if (!fileName) {
+      const urlParts = link.href.split('/');
+      fileName = urlParts[urlParts.length - 1] || 'archivo_desconocido';
+      fileName = fileName.split('?')[0];
+    }
+    // Consultar al backend antes de permitir la descarga
+    const { jwt_token } = await chrome.storage.local.get('jwt_token');
+    if (!jwt_token) return;
+    const res = await fetch('http://localhost:5001/api/check-download', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${jwt_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: link.href,
+        filename: fileName,
+        filesize: 0,
+        mimetype: ''
+      })
+    });
+    const data = await res.json();
+    if (!data.allowed) {
+      e.preventDefault();
+      e.stopPropagation();
+      // Redirigir a la pantalla de bloqueo personalizada
+      window.location.href = chrome.runtime.getURL('blocked.html?url=' + encodeURIComponent(link.href));
+      return false;
+    }
+  }
+}, true);
+
+// Interceptar descargas de blobs y descargas generadas por JavaScript
+(function() {
+  // Guardar referencias originales
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalWindowOpen = window.open;
+
+  // Interceptar createObjectURL para blobs
+  URL.createObjectURL = function(blob: Blob) {
+    // Intentar obtener el nombre del archivo si existe
+    let fileName = 'archivo_blob';
+    if (blob && (blob as any).name) {
+      fileName = (blob as any).name;
+    }
+    // Consultar al backend antes de permitir la descarga
+    chrome.storage.local.get('jwt_token', async ({ jwt_token }) => {
+      if (!jwt_token) return;
+      const res = await fetch('http://localhost:5001/api/check-download', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${jwt_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          url: window.location.href,
+          filename: fileName,
+          filesize: blob.size,
+          mimetype: blob.type
+        })
+      });
+      const data = await res.json();
+      if (!data.allowed) {
+        // Redirigir a la pantalla de bloqueo personalizada
+        window.location.href = chrome.runtime.getURL('blocked.html?url=' + encodeURIComponent(window.location.href));
+        return '';
+      }
+    });
+    return originalCreateObjectURL.apply(this, arguments as any);
+  };
+
+  // Interceptar window.open para descargas directas
+  window.open = function(...args) {
+    const url = args[0];
+    if (typeof url === 'string' && /\.(pdf|docx?|xlsx?|zip|rar|jpg|jpeg|png|gif|mp4|mp3|txt|csv)$/i.test(url)) {
+      chrome.storage.local.get('jwt_token', async ({ jwt_token }) => {
+        if (!jwt_token) return;
+        const res = await fetch('http://localhost:5001/api/check-download', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${jwt_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            url: url,
+            filename: url.split('/').pop() || 'archivo_desconocido',
+            filesize: 0,
+            mimetype: ''
+          })
+        });
+        const data = await res.json();
+        if (!data.allowed) {
+          window.location.href = chrome.runtime.getURL('blocked.html?url=' + encodeURIComponent(url));
+          return null;
+        }
+      });
+    }
+    return originalWindowOpen.apply(this, args);
+  };
+})();
+
 // Iniciar el script
 initialize();

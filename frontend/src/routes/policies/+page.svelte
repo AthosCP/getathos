@@ -7,11 +7,13 @@
 
   type Policy = {
     id: string;
-    domain: string;
+    domain?: string;
     action: string;
     tenant_id?: string; 
     group_id?: string | null;
     group?: { name: string } | null; 
+    user_id?: string | null;
+    scope?: 'user' | 'group' | 'tenant';
   };
 
   let currentUser: User | null = null;
@@ -27,7 +29,7 @@
 
   $: filteredPolicies = policies.filter(p =>
     (filter === 'all' || p.action === filter) &&
-    (search === '' || p.domain.toLowerCase().includes(search.toLowerCase()))
+    (search === '' || p.domain?.toLowerCase().includes(search.toLowerCase()))
   );
 
   let showModal = false;
@@ -41,11 +43,50 @@
 
   let isFormValid = false;
   $: {
-    const domainValid = modalPolicy.domain.trim() !== '';
+    const domainValid = modalPolicy.domain?.trim() !== '';
     const adminTenantSelected = currentUser?.role === 'admin' ? selectedTenantIdForPolicyCreation !== null : true;
     const groupSelectedIfNeeded = policyScope === 'group' ? modalPolicy.group_id !== null : true;
     isFormValid = domainValid && adminTenantSelected && groupSelectedIfNeeded;
   }
+
+  let downloadPolicies: Policy[] = [];
+  let loadingDownloads = false;
+  let errorDownloads = '';
+  let createErrorDownloads = '';
+  let filterDownloads = 'all';
+  let searchDownloads = '';
+  let showModalDownloads = false;
+  let isEditDownloads = false;
+  let modalDownloadPolicy: Policy = { id: '', domain: '', action: 'allow', group_id: null, group: null };
+  let policyScopeDownloads: 'tenant' | 'group' = 'tenant';
+  let availableGroupsDownloads: Array<{ id: string; name: string; tenant_id: string }> = [];
+  let tenantsListDownloads: Array<{ id: string; name: string }> = [];
+  let selectedTenantIdForDownloadPolicyCreation: string | null = null;
+  let isFormValidDownloads = false;
+
+  $: filteredDownloadPolicies = downloadPolicies.filter(p => {
+    const matchesFilter = filterDownloads === 'all' || p.action === filterDownloads;
+    const matchesUserGroup = selectedDownloadFilterType === 'all' || 
+      (selectedDownloadFilterType === 'user' && p.user_id === selectedDownloadFilterId?.replace('user_', '')) ||
+      (selectedDownloadFilterType === 'group' && p.group_id === selectedDownloadFilterId?.replace('group_', ''));
+    return matchesFilter && matchesUserGroup;
+  });
+
+  $: {
+    const domainValid = (typeof modalDownloadPolicy.domain === 'string' ? modalDownloadPolicy.domain.trim() : '') !== '';
+    const adminTenantSelected = currentUser?.role === 'admin' ? selectedTenantIdForDownloadPolicyCreation !== null : true;
+    const groupSelectedIfNeeded = policyScopeDownloads === 'group' ? modalDownloadPolicy.group_id !== null : true;
+    isFormValidDownloads = domainValid && adminTenantSelected && groupSelectedIfNeeded;
+  }
+
+  let downloadUsers: Array<{ id: string; email: string }> = [];
+  let downloadGroups: Array<{ id: string; name: string }> = [];
+  let loadingDownloadUsers = false;
+  let loadingDownloadGroups = false;
+  let errorDownloadUsers = '';
+  let errorDownloadGroups = '';
+  let selectedDownloadFilterType: 'user' | 'group' | 'all' = 'all';
+  let selectedDownloadFilterId: string | null = null;
 
   async function loadPolicies() {
     loading = true;
@@ -177,30 +218,202 @@
     }
   }
 
-  onMount(async () => {
-    await auth.init(); 
-    if (!auth.token || !currentUser) {
-      goto('/login');
-      return;
+  async function loadDownloadPolicies() {
+    loadingDownloads = true;
+    errorDownloads = '';
+    try {
+      const token = auth.token;
+      if (!token) {
+        auth.logout();
+        goto('/login');
+        return;
+      }
+      let fetchUrl = `${API_URL}/api/policies?type=download`;
+      const res = await fetch(fetchUrl, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        console.log('Políticas de descarga recibidas:', data.data);
+        downloadPolicies = data.data.map((p: any) => ({
+          ...p,
+          group_id: p.group_id || null,
+          group: p.group || null,
+          user_id: p.user_id || null
+        }));
+        console.log('Políticas de descarga procesadas:', downloadPolicies);
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        errorDownloads = data.error || 'Error al cargar políticas de descargas. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al cargar políticas de descargas:', e);
+      errorDownloads = 'Error de conexión al cargar políticas de descargas. Por favor, intente nuevamente.';
+    } finally {
+      loadingDownloads = false;
     }
-    loadPolicies();
-    if (currentUser.role === 'admin') {
-      loadTenantsForAdmin(); 
-    }
+  }
 
-    // Cargar datos para la pestaña activa
-    if (activeTab === 'access') {
-      loadPolicies();
-    } else if (activeTab === 'watermark') {
-      // Si hay función para cargar datos de watermark, llamarla aquí
-    } else if (activeTab === 'downloads') {
-      // Si hay función para cargar datos de downloads, llamarla aquí
-    } else if (activeTab === 'content') {
-      // Si hay función para cargar datos de content, llamarla aquí
-    } else if (activeTab === 'geo') {
-      // Si hay función para cargar datos de geo, llamarla aquí
-    } else if (activeTab === 'schedules') {
-      // Si hay función para cargar datos de schedules, llamarla aquí
+  async function loadTenantsForAdminDownloads() {
+    if (currentUser?.role !== 'admin') return;
+    try {
+      const token = auth.token;
+      if (!token) return;
+      const res = await fetch(`${API_URL}/api/athos/clientes`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        tenantsListDownloads = data.data || [];
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        errorDownloads = data.error || 'Error al cargar tenants. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al cargar tenants:', e);
+      errorDownloads = 'Error de conexión al cargar tenants. Por favor, intente nuevamente.';
+    }
+  }
+
+  async function loadGroupsForSelectedTenantDownloads() {
+    availableGroupsDownloads = [];
+    let tenantToLoad = null;
+    if (currentUser?.role === 'admin') {
+      tenantToLoad = selectedTenantIdForDownloadPolicyCreation;
+    } else if (currentUser?.role === 'client') {
+      if (currentUser?.tenant_id) {
+        tenantToLoad = currentUser.tenant_id;
+      } else if (auth.user?.tenant_id) {
+        tenantToLoad = auth.user.tenant_id;
+      } else {
+        tenantToLoad = 'dcb198e8-f380-40e0-a7e7-04707d5a4823';
+      }
+    }
+    if (!tenantToLoad) return;
+    createErrorDownloads = '';
+    try {
+      const token = auth.token;
+      if (!token) return;
+      const res = await fetch(`${API_URL}/api/groups?tenant_id=${tenantToLoad}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        availableGroupsDownloads = data.data || [];
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        createErrorDownloads = data.error || 'Error al cargar grupos para el tenant. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al cargar grupos para el tenant:', e);
+      createErrorDownloads = 'Error de conexión al cargar grupos para el tenant. Por favor, intente nuevamente.';
+    }
+  }
+
+  async function loadDownloadUsers() {
+    loadingDownloadUsers = true;
+    errorDownloadUsers = '';
+    try {
+      const token = auth.token;
+      if (!token) return;
+      const res = await fetch(`${API_URL}/api/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        downloadUsers = data.data;
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        errorDownloadUsers = data.error || 'Error al cargar usuarios. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al cargar usuarios:', e);
+      errorDownloadUsers = 'Error de conexión al cargar usuarios. Por favor, intente nuevamente.';
+    } finally {
+      loadingDownloadUsers = false;
+    }
+  }
+
+  async function loadDownloadGroups() {
+    loadingDownloadGroups = true;
+    errorDownloadGroups = '';
+    try {
+      const token = auth.token;
+      if (!token) return;
+      const res = await fetch(`${API_URL}/api/groups`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        downloadGroups = data.data;
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        errorDownloadGroups = data.error || 'Error al cargar grupos. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al cargar grupos:', e);
+      errorDownloadGroups = 'Error de conexión al cargar grupos. Por favor, intente nuevamente.';
+    } finally {
+      loadingDownloadGroups = false;
+    }
+  }
+
+  onMount(async () => {
+    try {
+      await auth.init(); 
+      if (!auth.token || !currentUser) {
+        goto('/login');
+        return;
+      }
+      await loadPolicies();
+      if (currentUser.role === 'admin') {
+        await loadTenantsForAdmin(); 
+      }
+
+      // Cargar datos para la pestaña activa
+      if (activeTab === 'access') {
+        await loadPolicies();
+      } else if (activeTab === 'watermark') {
+        // Si hay función para cargar datos de watermark, llamarla aquí
+      } else if (activeTab === 'downloads') {
+        await Promise.all([
+          loadDownloadPolicies(),
+          loadDownloadUsers(),
+          loadDownloadGroups()
+        ]);
+        if (currentUser.role === 'admin') {
+          await loadTenantsForAdminDownloads();
+        }
+      } else if (activeTab === 'content') {
+        // Si hay función para cargar datos de content, llamarla aquí
+      } else if (activeTab === 'geo') {
+        // Si hay función para cargar datos de geo, llamarla aquí
+      } else if (activeTab === 'schedules') {
+        // Si hay función para cargar datos de schedules, llamarla aquí
+      }
+    } catch (e) {
+      console.error('Error al inicializar la página:', e);
+      error = 'Error al cargar datos. Por favor, intente nuevamente.';
     }
   });
 
@@ -351,11 +564,204 @@
     }
   }
 
-  function setActiveTab(tab: string) {
+  async function setActiveTab(tab: string) {
     activeTab = tab;
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('policies_active_tab', tab);
     }
+    
+    // Cargar datos cuando se cambia de pestaña
+    if (tab === 'downloads') {
+      try {
+        await Promise.all([
+          loadDownloadPolicies(),
+          loadDownloadUsers(),
+          loadDownloadGroups()
+        ]);
+        if (currentUser?.role === 'admin') {
+          await loadTenantsForAdminDownloads();
+        }
+      } catch (e) {
+        console.error('Error al cargar datos de la pestaña de descargas:', e);
+        errorDownloads = 'Error al cargar datos. Por favor, intente nuevamente.';
+      }
+    }
+  }
+
+  async function openCreateModalDownloads() {
+    isEditDownloads = false;
+    modalDownloadPolicy = { id: '', domain: '', action: 'block', group_id: null, group: null, tenant_id: undefined, user_id: null };
+    policyScopeDownloads = 'tenant';
+    availableGroupsDownloads = [];
+    createErrorDownloads = '';
+    if (currentUser?.role === 'client') {
+      selectedTenantIdForDownloadPolicyCreation = currentUser.tenant_id ?? (auth.user?.tenant_id ?? null);
+      try {
+        await loadGroupsForSelectedTenantDownloads();
+      } catch (e) {
+        console.error('Error al cargar grupos al abrir modal de creación:', e);
+        createErrorDownloads = 'Error al cargar grupos. Por favor, intente nuevamente.';
+      }
+    } else {
+      selectedTenantIdForDownloadPolicyCreation = null;
+    }
+    showModalDownloads = true;
+  }
+
+  async function openEditModalDownloads(policy: Policy) {
+    isEditDownloads = true;
+    modalDownloadPolicy = { ...policy };
+    policyScopeDownloads = policy.group_id ? 'group' : 'tenant';
+    availableGroupsDownloads = [];
+    createErrorDownloads = '';
+    selectedTenantIdForDownloadPolicyCreation = policy.tenant_id || (currentUser?.role === 'client' ? (currentUser.tenant_id ?? null) : null);
+    if (selectedTenantIdForDownloadPolicyCreation) {
+      try {
+        await loadGroupsForSelectedTenantDownloads();
+      } catch (e) {
+        console.error('Error al cargar grupos al abrir modal de edición:', e);
+        createErrorDownloads = 'Error al cargar grupos. Por favor, intente nuevamente.';
+      }
+    }
+    showModalDownloads = true;
+  }
+  
+  async function handleAdminTenantSelectionChangeDownloads() {
+    modalDownloadPolicy.group_id = null;
+    policyScopeDownloads = 'tenant';
+    if(selectedTenantIdForDownloadPolicyCreation){
+      try {
+        await loadGroupsForSelectedTenantDownloads();
+      } catch (e) {
+        console.error('Error al cargar grupos al cambiar tenant:', e);
+        createErrorDownloads = 'Error al cargar grupos. Por favor, intente nuevamente.';
+      }
+    } else {
+      availableGroupsDownloads = [];
+    }
+  }
+
+  async function saveDownloadPolicy() {
+    try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+            console.error('No se encontró token');
+            await auth.logout();
+            goto('/login');
+            return;
+        }
+
+        if (auth.user?.role === 'admin' && !selectedTenantIdForDownloadPolicyCreation) {
+            console.error('Admin debe seleccionar un tenant');
+            createErrorDownloads = 'Debes seleccionar un tenant';
+            return;
+        }
+
+        let body = {
+            action: modalDownloadPolicy.action,
+            type: 'download',
+            tenant_id: currentUser.role === 'admin' ? selectedTenantIdForDownloadPolicyCreation : currentUser.tenant_id,
+            user_id: null,
+            group_id: null
+        };
+        if (modalDownloadPolicy.user_id) {
+            body.user_id = modalDownloadPolicy.user_id;
+        }
+        if (modalDownloadPolicy.group_id) {
+            body.group_id = modalDownloadPolicy.group_id;
+        }
+
+        console.log('Intentando crear política con datos:', body);
+
+        const response = await fetch(`${API_URL}/api/policies`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(body)
+        });
+
+        let errorData;
+        try {
+            errorData = await response.json();
+            console.log('Respuesta del servidor:', errorData);
+        } catch (e) {
+            console.error('Error al parsear respuesta:', e);
+            throw new Error('Error en el servidor. Por favor, intente nuevamente.');
+        }
+
+        if (!response.ok) {
+            if (errorData.error === 'Invalid JWT') {
+                console.error('Token JWT inválido');
+                await auth.logout();
+                goto('/login');
+                return;
+            }
+            throw new Error(errorData.error || 'Error al crear la política');
+        }
+
+        await loadDownloadPolicies();
+        showModalDownloads = false;
+        createErrorDownloads = '';
+    } catch (error: any) {
+        console.error('Error al guardar política de descargas:', error);
+        createErrorDownloads = error.message || 'Error al crear la política';
+    }
+  }
+
+  async function deleteDownloadPolicy(id: string) {
+    const token = auth.token;
+    if (!token) {
+      auth.logout();
+      goto('/login');
+      return;
+    }
+    if (!confirm('¿Está seguro que desea eliminar esta política de descargas? Esta acción no se puede deshacer.')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/policies/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        downloadPolicies = downloadPolicies.filter(p => p.id !== id);
+      } else {
+        if (data.error?.includes('invalid JWT')) {
+          auth.logout();
+          goto('/login');
+          return;
+        }
+        errorDownloads = data.error || 'Error al eliminar política de descargas. Por favor, intente nuevamente.';
+      }
+    } catch (e) {
+      console.error('Error al eliminar política de descargas:', e);
+      errorDownloads = 'Error de conexión al eliminar política de descargas. Por favor, intente nuevamente.';
+    }
+  }
+
+  function getUser(user_id: string | null) {
+    if (!user_id) return null;
+    const user = downloadUsers.find(u => String(u.id) === String(user_id));
+    return user || { id: user_id, email: 'Usuario no encontrado' };
+  }
+
+  function getGroup(group_id: string | null) {
+    if (!group_id) return null;
+    const group = downloadGroups.find(g => String(g.id) === String(group_id));
+    return group || { id: group_id, name: 'Grupo no encontrado' };
+  }
+
+  function getPolicyDisplayName(policy: Policy) {
+    if (policy.user_id) {
+      const user = getUser(policy.user_id);
+      return `Usuario: ${user ? user.email : 'Usuario no encontrado'}`;
+    }
+    if (policy.group_id) {
+      const group = getGroup(policy.group_id);
+      return `Grupo: ${group ? group.name : 'Grupo no encontrado'}`;
+    }
+    return 'Todos los Usuarios';
   }
 </script>
 
@@ -376,12 +782,6 @@
             Accesos
           </button>
           <button
-            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'watermark' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => setActiveTab('watermark')}
-          >
-            Sello de Agua
-          </button>
-          <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'downloads' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
             on:click={() => setActiveTab('downloads')}
           >
@@ -394,16 +794,22 @@
             Contenido
           </button>
           <button
-            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
-            on:click={() => setActiveTab('geo')}
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'watermark' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => setActiveTab('watermark')}
           >
-            Geolocalización
+            Sello de Agua
           </button>
           <button
             class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'schedules' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
             on:click={() => setActiveTab('schedules')}
           >
             Horarios
+          </button>
+          <button
+            class="py-4 px-1 border-b-2 font-medium text-sm {activeTab === 'geo' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}"
+            on:click={() => setActiveTab('geo')}
+          >
+            Geolocalización
           </button>
         </nav>
       </div>
@@ -437,7 +843,7 @@
                   {:else if activeTab === 'downloads'}
                     Establece restricciones y permisos para la descarga de archivos.
                   {:else if activeTab === 'content'}
-                  Gestiona y visualiza quién copió información y dónde fue pegada dentro de tu organización.
+                    Gestiona y visualiza quién copió información y dónde fue pegada dentro de tu organización.
                   {:else if activeTab === 'geo'}
                     Configura políticas de geolocalización para dispositivos móviles.
                   {:else if activeTab === 'schedules'}
@@ -451,6 +857,13 @@
                     on:click={openCreateModal}>
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
                     Nueva Política
+                </button>
+              {:else if activeTab === 'downloads'}
+                <button 
+                  class="px-4 py-2 rounded bg-[#00a1ff] text-white font-semibold hover:bg-[#0081cc]" 
+                  on:click={openCreateModalDownloads}>
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-1" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                  Nueva Política de Descarga
                 </button>
               {/if}
             </div>
@@ -541,7 +954,118 @@
           {:else if activeTab === 'watermark'}
             <div class="p-6"><p>Configuración de Sello de Agua (Próximamente)</p></div>
           {:else if activeTab === 'downloads'}
-            <div class="p-6"><p>Control de Descargas (Próximamente)</p></div>
+            <div class="px-4 py-5 sm:px-6 flex flex-wrap items-center gap-4">
+              <div>
+                <label for="filter-action-downloads" class="text-sm font-medium text-gray-700">Filtrar por acción:</label>
+                <select id="filter-action-downloads" bind:value={filterDownloads} class="ml-2 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                  <option value="all">Todas</option>
+                  <option value="allow">Permitidas</option>
+                  <option value="block">Bloqueadas</option>
+                </select>
+              </div>
+              <div>
+                <label for="filter-user-group-downloads" class="text-sm font-medium text-gray-700">Filtrar por:</label>
+                <select id="filter-user-group-downloads" bind:value={selectedDownloadFilterId} class="ml-2 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" on:change={() => {
+                  const val = selectedDownloadFilterId;
+                  if (!val) { selectedDownloadFilterType = 'all'; return; }
+                  if (val.startsWith('user_')) selectedDownloadFilterType = 'user';
+                  else if (val.startsWith('group_')) selectedDownloadFilterType = 'group';
+                }}>
+                  <option value={null}>Todos</option>
+                  <optgroup label="Usuarios">
+                    {#each downloadUsers as user}
+                      <option value={`user_${user.id}`}>{user.email}</option>
+                    {/each}
+                  </optgroup>
+                  <optgroup label="Grupos">
+                    {#each downloadGroups as group}
+                      <option value={`group_${group.id}`}>{group.name}</option>
+                    {/each}
+                  </optgroup>
+                </select>
+              </div>
+            </div>
+            {#if errorDownloads}
+              <div class="m-4 p-4 bg-red-100 text-red-700 rounded-md flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                </svg>
+                {errorDownloads}
+              </div>
+            {/if}
+            {#if loadingDownloads && downloadPolicies.length === 0}
+              <div class="text-center py-10">
+                <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="mt-2 text-sm text-gray-500">Cargando políticas de descargas...</p>
+              </div>
+            {:else if downloadPolicies.length === 0 && !loadingDownloads}
+              <div class="text-center py-10 px-6">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-gray-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 11.879l-.39.39m4.032-.39l.39.39m-2.016 2.016l.39.39m-.39-4.032l.39-.39" />
+                </svg>
+                <p class="mt-3 text-md font-semibold text-gray-700">No se encontraron políticas de descargas.</p>
+                <p class="text-sm text-gray-500">Intenta ajustar el filtro o crea una nueva política de descargas.</p>
+              </div>
+            {:else}
+              {#if filteredDownloadPolicies.length === 0}
+                <div class="text-center py-10 px-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-gray-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 11.879l-.39.39m4.032-.39l.39.39m-2.016 2.016l.39.39m-.39-4.032l.39-.39" />
+                  </svg>
+                  <p class="mt-3 text-md font-semibold text-gray-700">No se encontraron políticas que coincidan con los filtros.</p>
+                  <p class="text-sm text-gray-500">Intenta ajustar los filtros o crea una nueva política de descargas.</p>
+                </div>
+              {:else}
+                <div class="overflow-x-auto">
+                  <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usuario/Grupo</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acción</th>
+                        <th scope="col" class="relative px-6 py-3"><span class="sr-only">Acciones</span></th>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      {#each filteredDownloadPolicies as policy (policy.id)}
+                        <tr>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {#if policy.user_id}
+                              {#if getUser(policy.user_id)}
+                                {getUser(policy.user_id)?.email}
+                              {:else}
+                                {policy.user_id}
+                              {/if}
+                            {:else if policy.group_id}
+                              {#if getGroup(policy.group_id)}
+                                {getGroup(policy.group_id)?.name}
+                              {:else}
+                                {policy.group_id}
+                              {/if}
+                            {:else}
+                              Todos los Usuarios
+                            {/if}
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            <span class={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${policy.action === 'allow' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                              {policy.action === 'allow' ? 'Permitido' : 'Bloqueado'}
+                            </span>
+                          </td>
+                          <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                            <button on:click={() => openEditModalDownloads(policy)} class="text-indigo-600 hover:text-indigo-900">Editar</button>
+                            <button on:click={() => deleteDownloadPolicy(policy.id)} class="text-red-600 hover:text-red-900">Eliminar</button>
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            {/if}
           {:else if activeTab === 'content'}
             <div class="p-6"><p>Gestión de Contenido (Próximamente)</p></div>
           {:else if activeTab === 'geo'}
@@ -701,4 +1225,128 @@
       </div>
     </div>
   </div>
-{/if} 
+{/if}
+
+{#if showModalDownloads}
+  <div class="fixed z-10 inset-0 overflow-y-auto">
+    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+      <div class="fixed inset-0 transition-opacity" aria-hidden="true" on:click={() => showModalDownloads = false}>
+        <div class="absolute inset-0 bg-gray-500 opacity-75"></div>
+      </div>
+      <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+      <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full relative">
+        <button
+          class="absolute top-2 right-2 text-gray-400 hover:text-gray-600 text-2xl font-bold focus:outline-none z-20"
+          on:click={() => showModalDownloads = false}
+          aria-label="Cerrar"
+        >
+          ×
+        </button>
+        <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+          <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+            {isEditDownloads ? 'Editar' : 'Crear Nueva'} Política de Descarga
+          </h3>
+          <form on:submit|preventDefault={saveDownloadPolicy}>
+            {#if currentUser?.role === 'admin'}
+              <div class="mb-4">
+                <label for="modal-tenant-downloads" class="block text-sm font-medium text-gray-700 mb-1">Tenant:</label>
+                <select
+                  id="modal-tenant-downloads"
+                  bind:value={selectedTenantIdForDownloadPolicyCreation}
+                  on:change={handleAdminTenantSelectionChangeDownloads}
+                  class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Seleccione un tenant</option>
+                  {#each tenantsListDownloads as tenant}
+                    <option value={tenant.id}>{tenant.name}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
+            <div class="mb-4">
+              <span class="block text-sm font-medium text-gray-700 mb-1">Tipo de política:</span>
+              <div class="mt-2 grid grid-cols-2 gap-4">
+                <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {modalDownloadPolicy.user_id !== null && modalDownloadPolicy.user_id !== undefined ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'}">
+                  <input type="radio" class="sr-only" name="policyType" value="user" checked={modalDownloadPolicy.user_id !== null && modalDownloadPolicy.user_id !== undefined} on:change={() => { modalDownloadPolicy.user_id = ''; modalDownloadPolicy.group_id = null; }}>
+                  <span class="text-sm font-medium text-gray-700">Usuario</span>
+                </label>
+                <label class="inline-flex items-center w-full p-3 border rounded-md cursor-pointer hover:bg-gray-50 {modalDownloadPolicy.group_id !== null && modalDownloadPolicy.group_id !== undefined ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-200' : 'border-gray-300'}">
+                  <input type="radio" class="sr-only" name="policyType" value="group" checked={modalDownloadPolicy.group_id !== null && modalDownloadPolicy.group_id !== undefined} on:change={() => { modalDownloadPolicy.group_id = ''; modalDownloadPolicy.user_id = null; }}>
+                  <span class="text-sm font-medium text-gray-700">Grupo</span>
+                </label>
+              </div>
+            </div>
+            {#if modalDownloadPolicy.user_id !== null}
+              <div class="mb-4">
+                <label for="modal-user-downloads" class="block text-sm font-medium text-gray-700 mb-1">Usuario:</label>
+                <select
+                  id="modal-user-downloads"
+                  bind:value={modalDownloadPolicy.user_id}
+                  class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Seleccione un usuario</option>
+                  {#each downloadUsers as user}
+                    <option value={user.id}>{user.email}</option>
+                  {/each}
+                </select>
+              </div>
+            {:else if modalDownloadPolicy.group_id !== null}
+              <div class="mb-4">
+                <label for="modal-group-downloads" class="block text-sm font-medium text-gray-700 mb-1">Grupo:</label>
+                <select
+                  id="modal-group-downloads"
+                  bind:value={modalDownloadPolicy.group_id}
+                  class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  required
+                >
+                  <option value="">Seleccione un grupo</option>
+                  {#each availableGroupsDownloads as group}
+                    <option value={group.id}>{group.name}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
+            <div class="mb-4">
+              <label for="modal-action-downloads" class="block text-sm font-medium text-gray-700 mb-1">Acción:</label>
+              <select
+                id="modal-action-downloads"
+                bind:value={modalDownloadPolicy.action}
+                class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+              >
+                <option value="block">Bloquear</option>
+                <option value="allow">Permitir</option>
+              </select>
+            </div>
+            {#if createErrorDownloads}
+              <div class="mb-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-md text-sm flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                </svg>
+                {createErrorDownloads}
+              </div>
+            {/if}
+          </form>
+        </div>
+        <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+          <button 
+            type="submit" 
+            on:click={saveDownloadPolicy}
+            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-[#00a1ff] text-base font-medium text-white hover:bg-[#0081cc] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#00a1ff] sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!((modalDownloadPolicy.user_id && modalDownloadPolicy.user_id !== '') || (modalDownloadPolicy.group_id && modalDownloadPolicy.group_id !== '')) || (currentUser?.role === 'admin' && !selectedTenantIdForDownloadPolicyCreation)}
+          >
+            {isEditDownloads ? 'Guardar Cambios' : 'Crear Política'}
+          </button>
+          <button 
+            type="button" 
+            on:click={() => showModalDownloads = false} 
+            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}

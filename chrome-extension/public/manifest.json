@@ -8,7 +8,9 @@
     "storage",
     "webNavigation",
     "tabs",
-    "notifications"
+    "notifications",
+    "downloads",
+    "downloads.open"
   ],
   "host_permissions": [
     "http://localhost:5001/*",

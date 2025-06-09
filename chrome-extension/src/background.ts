@@ -354,19 +354,99 @@ if (chrome.downloads) {
   chrome.downloads.onCreated.addListener(async (downloadItem) => {
     try {
       const url = downloadItem.url;
-      await registerNavigation({
-        url: url,
-        action: 'descarga_iniciada',
-        eventType: 'descarga',
-        eventDetails: {
-          filename: downloadItem.filename,
-          file_size: downloadItem.fileSize,
-          mime_type: downloadItem.mime
+      const filename = downloadItem.filename || 'archivo_desconocido';
+      
+      console.log('[Athos] Descarga detectada:', { url, filename });
+      
+      // Verificar si las descargas están permitidas
+      const { jwt_token } = await chrome.storage.local.get('jwt_token');
+      if (!jwt_token) {
+        console.log('[Athos] No hay token JWT, permitiendo descarga');
+        return;
+      }
+      // Log del JWT y user_id
+      try {
+        const payload = JSON.parse(atob(jwt_token.split('.')[1]));
+        console.log('[Athos][DEBUG] JWT usado:', jwt_token);
+        console.log('[Athos][DEBUG] user_id (sub) en JWT:', payload.sub);
+        console.log('[Athos][DEBUG] email en JWT:', payload.email);
+      } catch (e) {
+        console.warn('[Athos][DEBUG] No se pudo decodificar el JWT:', e);
+      }
+      
+      // Consultar al backend si la descarga está permitida
+      const checkResponse = await fetch(`${API_URL}/api/check-download`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${jwt_token}`,
+          'Content-Type': 'application/json'
         },
-        hasToken: true
+        body: JSON.stringify({
+          url: url,
+          filename: filename,
+          filesize: downloadItem.fileSize,
+          mimetype: downloadItem.mime
+        })
       });
+      
+      const checkData = await checkResponse.json();
+      console.log('[Athos] Respuesta de verificación de descarga:', checkData);
+      
+      if (!checkData.allowed) {
+        // Cancelar la descarga si no está permitida
+        console.log('[Athos] Descarga bloqueada:', checkData.reason);
+        console.log('[Athos][DEBUG] Intentando cancelar descarga con ID:', downloadItem.id);
+        chrome.downloads.cancel(downloadItem.id, () => {
+          if (chrome.runtime.lastError) {
+            console.error('[Athos][DEBUG] Error al cancelar descarga:', chrome.runtime.lastError.message);
+          } else {
+            console.log('[Athos][DEBUG] Descarga cancelada exitosamente:', downloadItem.id);
+          }
+        });
+        // Notificar al usuario
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon128.png',
+          title: 'Descarga Bloqueada',
+          message: checkData.reason || 'Las descargas están bloqueadas por políticas de la organización.',
+          priority: 2
+        });
+        // Registrar el intento bloqueado
+        await registerNavigation({
+          url: url,
+          action: 'descarga_bloqueada',
+          eventType: 'descarga',
+          eventDetails: {
+            filename: filename,
+            file_size: downloadItem.fileSize,
+            mime_type: downloadItem.mime,
+            reason: checkData.reason
+          },
+          hasToken: true
+        });
+        // Redirigir la pestaña activa a la pantalla de bloqueo
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+          if (tabs[0] && tabs[0].id) {
+            redirectToBlocked(tabs[0].id, url);
+          }
+        });
+      } else {
+        // Registrar la descarga permitida
+        await registerNavigation({
+          url: url,
+          action: 'descarga_iniciada',
+          eventType: 'descarga',
+          eventDetails: {
+            filename: filename,
+            file_size: downloadItem.fileSize,
+            mime_type: downloadItem.mime
+          },
+          hasToken: true
+        });
+      }
     } catch (error) {
-      console.error('Error al registrar descarga:', error);
+      console.error('[Athos] Error al procesar descarga:', error);
+      // En caso de error, permitir la descarga para no interrumpir al usuario
     }
   });
 } else {

@@ -35,11 +35,16 @@ CREATE TABLE IF NOT EXISTS policies (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
-    domain TEXT NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    domain TEXT,
     action TEXT CHECK (action IN ('allow', 'block')) NOT NULL,
+    type TEXT CHECK (type IN ('access', 'download')) NOT NULL DEFAULT 'access',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-    CONSTRAINT unique_domain_per_tenant_group UNIQUE (domain, tenant_id, group_id)
+    CONSTRAINT unique_domain_per_tenant_group UNIQUE (domain, tenant_id, group_id) WHERE domain IS NOT NULL,
+    CONSTRAINT unique_user_policy UNIQUE (tenant_id, user_id, type) WHERE user_id IS NOT NULL,
+    CONSTRAINT unique_group_policy UNIQUE (tenant_id, group_id, type) WHERE group_id IS NOT NULL,
+    CONSTRAINT check_domain_for_access CHECK (type != 'access' OR domain IS NOT NULL)
 );
 
 -- Tabla de historial de navegación
